@@ -171,6 +171,8 @@ if uploaded_file:
         months = st.selectbox("Antal måneder", [3, 6, 9, 12])
 
     df_all = filtrer_perioder(df, start_month, start_year, months)
+    st.write("DEBUG – antal rækker i df_all:", len(df_all))
+    st.write(df_all.head(20))
 
     figs = []
 
