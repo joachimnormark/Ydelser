@@ -1,308 +1,368 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from fpdf import FPDF
+from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 import io
+from PIL import Image
+import base64
 
+# Konfiguration af siden
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
-# ---------------------------------------------------------
-# DANSKE MÅNEDER
-# ---------------------------------------------------------
+st.title("📊 Ydelsesanalyse - Periodesammenligning")
 
-DANSKE_MÅNEDER_KORT = {
-    1: "jan", 2: "feb", 3: "mar", 4: "apr",
-    5: "maj", 6: "jun", 7: "jul", 8: "aug",
-    9: "sep", 10: "okt", 11: "nov", 12: "dec",
-}
+# File upload
+uploaded_file = st.file_uploader("Upload dit datasæt (Excel-fil)", type=['xlsx', 'xls'])
 
-def måned_label(år, måned):
-    return f"{DANSKE_MÅNEDER_KORT[måned]} {str(int(år))[-2:]}"
-
-
-# ---------------------------------------------------------
-# DATAINDLÆSNING
-# ---------------------------------------------------------
-
-def load_data(uploaded_file):
+if uploaded_file is not None:
+    # Indlæs data
     df = pd.read_excel(uploaded_file)
-
-    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
-
-    kol_dato = [c for c in df.columns if "dato" in c][0]
-    kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
-    kol_antal = [c for c in df.columns if "antal" in c][0]
-
-    if not pd.api.types.is_datetime64_any_dtype(df[kol_dato]):
-        df[kol_dato] = pd.to_datetime(df[kol_dato], errors="coerce")
-
-    df = df.dropna(subset=[kol_dato])
-
-    df["dato"] = df[kol_dato]
-    df["år"] = df["dato"].dt.year
-    df["måned"] = df["dato"].dt.month
-
-    df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
-
-    df["ydelseskode"] = (
-        df[kol_kode]
-        .astype(str)
-        .str.replace(r"\D", "", regex=True)
-        .str.zfill(4)
+    
+    # Filtrer kun data hvor Antal >= 1
+    df = df[df['Antal'] >= 1].copy()
+    
+    # Konverter dato til datetime hvis ikke allerede
+    df['Ydelses dato'] = pd.to_datetime(df['Ydelses dato'])
+    
+    st.success(f"✅ Data indlæst: {len(df)} rækker (efter filtrering af Antal >= 1)")
+    
+    # Sidebar til periode-valg
+    st.sidebar.header("Vælg Periode 1")
+    
+    # Find tilgængelige år og måneder
+    min_date = df['Ydelses dato'].min()
+    max_date = df['Ydelses dato'].max()
+    
+    # Lav liste af tilgængelige år
+    available_years = sorted(df['Ydelses dato'].dt.year.unique())
+    
+    # Valg af år
+    selected_year = st.sidebar.selectbox("Vælg år", available_years)
+    
+    # Valg af måned
+    month_names = {
+        1: "Januar", 2: "Februar", 3: "Marts", 4: "April",
+        5: "Maj", 6: "Juni", 7: "Juli", 8: "August",
+        9: "September", 10: "Oktober", 11: "November", 12: "December"
+    }
+    
+    selected_month = st.sidebar.selectbox(
+        "Vælg måned",
+        options=list(range(1, 13)),
+        format_func=lambda x: month_names[x]
     )
-
-    return df
-
-
-# ---------------------------------------------------------
-# PERIODEFILTRERING
-# ---------------------------------------------------------
-
-def filtrer_perioder(df, start_month, start_year, months):
-    df["periode_key"] = df["år"] * 12 + df["måned"]
-
-    start_key = start_year * 12 + start_month
-    slut_key = start_key + months - 1
-
-    p1 = df[(df["periode_key"] >= start_key) & (df["periode_key"] <= slut_key)].copy()
-    p1["periode"] = "P1"
-
-    p2_start_key = start_key + 12
-    p2_slut_key = slut_key + 12
-
-    p2 = df[(df["periode_key"] >= p2_start_key) & (df["periode_key"] <= p2_slut_key)].copy()
-    p2["periode"] = "P2"
-
-    return pd.concat([p1, p2], ignore_index=True)
-
-
-# ---------------------------------------------------------
-# HJÆLPEFUNKTION: Numerisk x-akse + labels
-# ---------------------------------------------------------
-
-def lav_x_akse(grp, start_month):
-    grp["relativ_måned"] = (grp["måned"] - start_month) % 12
-    grp["x"] = grp["relativ_måned"] * 2 + grp["periode"].map({"P1": -0.2, "P2": 0.2})
-    grp["labelpos"] = grp["relativ_måned"] * 2
-    return grp
-
-
-# ---------------------------------------------------------
-# GRAF: 0101 + 0120 + 0125 (stacked)
-# ---------------------------------------------------------
-
-def graf_stacked(df_all, start_month):
-    df = df_all.copy()
-
-    df["gruppe"] = None
-    df.loc[df["ydelseskode"] == "0120", "gruppe"] = "0120"
-    df.loc[df["ydelseskode"].isin(["0101", "0125"]), "gruppe"] = "0101+0125"
-    df = df[df["gruppe"].notna()]
-
-    if df.empty:
-        return None
-
-    grp = df.groupby(["periode", "år", "måned", "gruppe"])["antal"].sum().reset_index()
-
-    grp = lav_x_akse(grp, start_month)
-
-    # Beregn procentandel for 0120
-    total = grp.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
-    total = total.rename(columns={"antal": "total"})
-
-    df0120 = grp[grp["gruppe"] == "0120"][["periode", "år", "måned", "antal"]]
-    df0120 = df0120.rename(columns={"antal": "antal_0120"})
-
-    pct = pd.merge(total, df0120, on=["periode", "år", "måned"], how="left")
-    pct["pct_0120"] = (pct["antal_0120"] / pct["total"] * 100).round(1).fillna(0)
-
-    grp = pd.merge(grp, pct[["periode", "år", "måned", "pct_0120"]], on=["periode", "år", "måned"], how="left")
-
-    # 0120 nederst
-    grp["gruppe"] = pd.Categorical(grp["gruppe"], categories=["0120", "0101+0125"], ordered=True)
-
-    fig = go.Figure()
-
-    # 0120 nederst (rød)
-    df_red = grp[grp["gruppe"] == "0120"]
-    fig.add_bar(
-        x=df_red["x"],
-        y=df_red["antal"],
-        name="0120",
-        marker_color="red",
-        width=0.8,   # søjlebredde
+    
+    # Valg af antal måneder
+    duration_months = st.sidebar.selectbox(
+        "Vælg antal måneder",
+        options=[3, 6, 9, 12]
     )
+    
+    # Beregn periode 1
+    start_date_p1 = datetime(selected_year, selected_month, 1)
+    end_date_p1 = start_date_p1 + relativedelta(months=duration_months) - timedelta(days=1)
+    
+    # Beregn periode 2 (et år senere)
+    start_date_p2 = start_date_p1 + relativedelta(years=1)
+    end_date_p2 = start_date_p2 + relativedelta(months=duration_months) - timedelta(days=1)
+    
+    # Vis valgte perioder
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Periode 1:**")
+    st.sidebar.info(f"{start_date_p1.strftime('%b %Y')} - {end_date_p1.strftime('%b %Y')}")
+    
+    st.sidebar.markdown("**Periode 2:**")
+    st.sidebar.info(f"{start_date_p2.strftime('%b %Y')} - {end_date_p2.strftime('%b %Y')}")
+    
+    # Filtrer data for begge perioder
+    df_p1 = df[(df['Ydelses dato'] >= start_date_p1) & (df['Ydelses dato'] <= end_date_p1)].copy()
+    df_p2 = df[(df['Ydelses dato'] >= start_date_p2) & (df['Ydelses dato'] <= end_date_p2)].copy()
+    
+    # Tilføj måned-kolonne (1, 2, 3, etc.)
+    df_p1['Måned_nr'] = ((df_p1['Ydelses dato'].dt.year - start_date_p1.year) * 12 + 
+                          df_p1['Ydelses dato'].dt.month - start_date_p1.month + 1)
+    df_p2['Måned_nr'] = ((df_p2['Ydelses dato'].dt.year - start_date_p2.year) * 12 + 
+                          df_p2['Ydelses dato'].dt.month - start_date_p2.month + 1)
+    
+    # Check om der er data
+    if len(df_p1) == 0 and len(df_p2) == 0:
+        st.warning("⚠️ Ingen data fundet for de valgte perioder.")
+    else:
+        # Funktion til at lave graf 1: Grundydelser
+        def create_grundydelser_chart():
+            grundydelser_koder = [101, 125, 120]
+            
+            data_p1 = df_p1[df_p1['Ydelseskode'].isin(grundydelser_koder)].groupby('Måned_nr').size()
+            data_p2 = df_p2[df_p2['Ydelseskode'].isin(grundydelser_koder)].groupby('Måned_nr').size()
+            
+            # Beregn 120-procent for hver måned
+            kode_120_p1 = df_p1[df_p1['Ydelseskode'] == 120].groupby('Måned_nr').size()
+            kode_120_p2 = df_p2[df_p2['Ydelseskode'] == 120].groupby('Måned_nr').size()
+            
+            fig = go.Figure()
+            
+            # Lav data for alle måneder
+            x_labels = []
+            y_values = []
+            colors = []
+            annotations = []
+            
+            for month in range(1, duration_months + 1):
+                # Periode 1
+                count_p1 = data_p1.get(month, 0)
+                count_120_p1 = kode_120_p1.get(month, 0)
+                pct_p1 = (count_120_p1 / count_p1 * 100) if count_p1 > 0 else 0
+                
+                x_labels.append(f"M{month} P1")
+                y_values.append(count_p1)
+                colors.append('blue')
+                annotations.append(dict(
+                    x=len(x_labels) - 1,
+                    y=count_p1,
+                    text=f"{pct_p1:.0f}%",
+                    showarrow=False,
+                    yshift=-15,
+                    font=dict(color='red', size=10)
+                ))
+                
+                # Periode 2
+                count_p2 = data_p2.get(month, 0)
+                count_120_p2 = kode_120_p2.get(month, 0)
+                pct_p2 = (count_120_p2 / count_p2 * 100) if count_p2 > 0 else 0
+                
+                x_labels.append(f"M{month} P2")
+                y_values.append(count_p2)
+                colors.append('lightblue')
+                annotations.append(dict(
+                    x=len(x_labels) - 1,
+                    y=count_p2,
+                    text=f"{pct_p2:.0f}%",
+                    showarrow=False,
+                    yshift=-15,
+                    font=dict(color='red', size=10)
+                ))
+            
+            fig.add_trace(go.Bar(
+                x=x_labels,
+                y=y_values,
+                marker_color=colors,
+                text=y_values,
+                textposition='outside'
+            ))
+            
+            fig.update_layout(
+                title="Graf 1: Grundydelser (101, 125, 120) - Røde tal viser 120-procent",
+                xaxis_title="Måned",
+                yaxis_title="Antal",
+                showlegend=False,
+                height=500,
+                annotations=annotations
+            )
+            
+            return fig
+        
+        # Funktion til at lave graf 2: Besøg
+        def create_besøg_chart():
+            besøg_koder = [411, 421, 431, 441, 491]
+            
+            data_p1 = df_p1[df_p1['Ydelseskode'].isin(besøg_koder)].groupby('Måned_nr').size()
+            data_p2 = df_p2[df_p2['Ydelseskode'].isin(besøg_koder)].groupby('Måned_nr').size()
+            
+            fig = go.Figure()
+            
+            x_labels = []
+            y_values = []
+            colors = []
+            
+            for month in range(1, duration_months + 1):
+                # Periode 1
+                count_p1 = data_p1.get(month, 0)
+                x_labels.append(f"M{month} P1")
+                y_values.append(count_p1)
+                colors.append('green')
+                
+                # Periode 2
+                count_p2 = data_p2.get(month, 0)
+                x_labels.append(f"M{month} P2")
+                y_values.append(count_p2)
+                colors.append('lightgreen')
+            
+            fig.add_trace(go.Bar(
+                x=x_labels,
+                y=y_values,
+                marker_color=colors,
+                text=y_values,
+                textposition='outside'
+            ))
+            
+            fig.update_layout(
+                title="Graf 2: Besøg (411, 421, 431, 441, 491)",
+                xaxis_title="Måned",
+                yaxis_title="Antal",
+                showlegend=False,
+                height=500
+            )
+            
+            return fig
+        
+        # Funktion til at lave graf 3: Uddannelseslæger
+        def create_uddannelseslæger_chart():
+            grundydelser_koder = [101, 125, 120]
+            erfarne_læger = ['mp', 'jn', 'jes', 'ah', 'cj', 'in']
+            
+            # Periode 1
+            data_p1_alle = df_p1[df_p1['Ydelseskode'].isin(grundydelser_koder)].groupby('Måned_nr').size()
+            data_p1_uddannelse = df_p1[
+                (df_p1['Ydelseskode'].isin(grundydelser_koder)) & 
+                (~df_p1['Bruger'].isin(erfarne_læger))
+            ].groupby('Måned_nr').size()
+            
+            # Periode 2
+            data_p2_alle = df_p2[df_p2['Ydelseskode'].isin(grundydelser_koder)].groupby('Måned_nr').size()
+            data_p2_uddannelse = df_p2[
+                (df_p2['Ydelseskode'].isin(grundydelser_koder)) & 
+                (~df_p2['Bruger'].isin(erfarne_læger))
+            ].groupby('Måned_nr').size()
+            
+            fig = go.Figure()
+            
+            x_labels = []
+            y_values = []
+            colors = []
+            annotations = []
+            
+            for month in range(1, duration_months + 1):
+                # Periode 1
+                alle_p1 = data_p1_alle.get(month, 0)
+                uddannelse_p1 = data_p1_uddannelse.get(month, 0)
+                pct_p1 = (uddannelse_p1 / alle_p1 * 100) if alle_p1 > 0 else 0
+                
+                x_labels.append(f"M{month} P1")
+                y_values.append(alle_p1)
+                colors.append('purple')
+                annotations.append(dict(
+                    x=len(x_labels) - 1,
+                    y=alle_p1,
+                    text=f"{pct_p1:.0f}%",
+                    showarrow=False,
+                    yshift=-15,
+                    font=dict(color='orange', size=10, weight='bold')
+                ))
+                
+                # Periode 2
+                alle_p2 = data_p2_alle.get(month, 0)
+                uddannelse_p2 = data_p2_uddannelse.get(month, 0)
+                pct_p2 = (uddannelse_p2 / alle_p2 * 100) if alle_p2 > 0 else 0
+                
+                x_labels.append(f"M{month} P2")
+                y_values.append(alle_p2)
+                colors.append('lavender')
+                annotations.append(dict(
+                    x=len(x_labels) - 1,
+                    y=alle_p2,
+                    text=f"{pct_p2:.0f}%",
+                    showarrow=False,
+                    yshift=-15,
+                    font=dict(color='orange', size=10, weight='bold')
+                ))
+            
+            fig.add_trace(go.Bar(
+                x=x_labels,
+                y=y_values,
+                marker_color=colors,
+                text=y_values,
+                textposition='outside'
+            ))
+            
+            fig.update_layout(
+                title="Graf 3: Uddannelseslæger i procent af grundydelser (Orange tal = procent fra andre end mp, jn, jes, ah, cj, in)",
+                xaxis_title="Måned",
+                yaxis_title="Antal grundydelser",
+                showlegend=False,
+                height=500,
+                annotations=annotations
+            )
+            
+            return fig
+        
+        # Vis graferne
+        st.header("Visualiseringer")
+        
+        chart1 = create_grundydelser_chart()
+        st.plotly_chart(chart1, use_container_width=True)
+        
+        chart2 = create_besøg_chart()
+        st.plotly_chart(chart2, use_container_width=True)
+        
+        chart3 = create_uddannelseslæger_chart()
+        st.plotly_chart(chart3, use_container_width=True)
+        
+        # PDF Download funktionalitet
+        st.markdown("---")
+        st.header("📥 Download rapport")
+        
+        if st.button("Generer PDF-rapport", type="primary"):
+            with st.spinner("Genererer PDF..."):
+                # Gem graferne som billeder
+                img1 = chart1.to_image(format="png", width=1200, height=500)
+                img2 = chart2.to_image(format="png", width=1200, height=500)
+                img3 = chart3.to_image(format="png", width=1200, height=500)
+                
+                # Opret en simpel PDF med reportlab
+                from reportlab.lib.pagesizes import A4, landscape
+                from reportlab.pdfgen import canvas
+                from reportlab.lib.units import inch
+                
+                buffer = io.BytesIO()
+                c = canvas.Canvas(buffer, pagesize=landscape(A4))
+                width, height = landscape(A4)
+                
+                # Side 1
+                c.setFont("Helvetica-Bold", 16)
+                c.drawString(50, height - 50, "Ydelsesanalyse - Periodesammenligning")
+                c.setFont("Helvetica", 12)
+                c.drawString(50, height - 80, f"Periode 1: {start_date_p1.strftime('%b %Y')} - {end_date_p1.strftime('%b %Y')}")
+                c.drawString(50, height - 100, f"Periode 2: {start_date_p2.strftime('%b %Y')} - {end_date_p2.strftime('%b %Y')}")
+                
+                # Graf 1
+                c.drawImage(io.BytesIO(img1), 50, height - 400, width=700, height=250, preserveAspectRatio=True)
+                
+                c.showPage()
+                
+                # Side 2
+                c.drawImage(io.BytesIO(img2), 50, height - 350, width=700, height=250, preserveAspectRatio=True)
+                
+                c.showPage()
+                
+                # Side 3
+                c.drawImage(io.BytesIO(img3), 50, height - 350, width=700, height=250, preserveAspectRatio=True)
+                
+                c.save()
+                
+                buffer.seek(0)
+                
+                st.download_button(
+                    label="⬇️ Download PDF",
+                    data=buffer,
+                    file_name=f"ydelsesanalyse_{start_date_p1.strftime('%Y%m')}_rapport.pdf",
+                    mime="application/pdf"
+                )
+                
+                st.success("✅ PDF klar til download!")
 
-    # 0101+0125 øverst (blå)
-    df_blue = grp[grp["gruppe"] == "0101+0125"]
-    fig.add_bar(
-        x=df_blue["x"],
-        y=df_blue["antal"],
-        name="0101+0125",
-        marker_color="steelblue",
-        width=0.8,   # bredere søjler
-    )
-
-    # Procenttal
-    for _, row in df_red.iterrows():
-        fig.add_annotation(
-            x=row["x"],
-            y=0,
-            text=f"{row['pct_0120']}%",
-            showarrow=False,
-            yshift=-20,
-            font=dict(size=10, color="red"),
-        )
-
-    # Labels
-    labels = grp.groupby("labelpos").first().reset_index()
-    fig.update_xaxes(
-        tickmode="array",
-        tickvals=labels["labelpos"],
-        ticktext=[måned_label(r["år"], r["måned"]) for _, r in labels.iterrows()],
-    )
-
-    fig.update_layout(
-        title="0101 + 0120 + 0125 (stacked)",
-        barmode="stack",
-        bargap=0.05,
-        height=500,
-    )
-
-    return fig
-
-
-# ---------------------------------------------------------
-# GRAF: Øvrige ydelser (parvis tætstående)
-# ---------------------------------------------------------
-
-def graf_ydelser(df_all, koder, title, start_month):
-    df = df_all[df_all["ydelseskode"].isin(koder)].copy()
-    if df.empty:
-        return None
-
-    grp = df.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
-
-    grp = lav_x_akse(grp, start_month)
-
-    fig = go.Figure()
-
-    # P1 = blå
-    df_p1 = grp[grp["periode"] == "P1"]
-    fig.add_bar(
-        x=df_p1["x"],
-        y=df_p1["antal"],
-        name="P1",
-        marker_color="blue",
-        width=0.8,   # bredere søjler
-    )
-
-    # P2 = orange
-    df_p2 = grp[grp["periode"] == "P2"]
-    fig.add_bar(
-        x=df_p2["x"],
-        y=df_p2["antal"],
-        name="P2",
-        marker_color="blue",
-        width=0.8,   # bredere søjler
-    )
-
-    labels = grp.groupby("labelpos").first().reset_index()
-    fig.update_xaxes(
-        tickmode="array",
-        tickvals=labels["labelpos"],
-        ticktext=[måned_label(r["år"], r["måned"]) for _, r in labels.iterrows()],
-    )
-
-    fig.update_layout(
-        title=title,
-        barmode="group",
-        bargap=0.05,
-        height=500,
-    )
-
-    return fig
-
-
-# ---------------------------------------------------------
-# PDF (virker i Streamlit Cloud)
-# ---------------------------------------------------------
-
-def lav_pdf(figures):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    for fig in figures:
-        if fig is None:
-            continue
-
-        # Gem figur som PNG uden Kaleido
-        img_bytes = fig.to_image(format="png")
-
-        buf = io.BytesIO(img_bytes)
-        buf.seek(0)
-
-        pdf.add_page()
-        pdf.image(buf, x=10, y=10, w=180)
-
-    return pdf.output(dest="S").encode("latin1")
-
-
-
-# ---------------------------------------------------------
-# UI
-# ---------------------------------------------------------
-
-st.title("Analyse af ydelser")
-
-uploaded_file = st.file_uploader("Upload Excel-fil", type=["xlsx"])
-
-if uploaded_file:
-    df = load_data(uploaded_file)
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        start_month = st.selectbox(
-            "Startmåned",
-            list(range(1, 13)),
-            format_func=lambda m: DANSKE_MÅNEDER_KORT[m],
-        )
-
-    with col2:
-        start_year = st.selectbox("Startår", sorted(df["år"].unique()))
-
-    with col3:
-        months = st.selectbox("Antal måneder", [3, 6, 9, 12])
-
-    df_all = filtrer_perioder(df, start_month, start_year, months)
-
-    figs = []
-
-    for fig in [
-        graf_stacked(df_all, start_month),
-        graf_ydelser(df_all, ["2101"], "2101 pr. måned", start_month),
-        graf_ydelser(df_all, ["7156"], "7156 pr. måned", start_month),
-        graf_ydelser(df_all, ["2149"], "2149 pr. måned", start_month),
-        graf_ydelser(df_all, ["0411", "0421", "0431", "0491"], "0411+0421+0431+0491 pr. måned", start_month),
-    ]:
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
-            figs.append(fig)
-
-    try:
-        pdf_bytes = lav_pdf(figs)
-        st.download_button("Download PDF", data=pdf_bytes, file_name="ydelser.pdf", mime="application/pdf")
-    except:
-        st.info("PDF kunne ikke genereres i dette miljø.")
-
-
-# ---------------------------------------------------------
-# DEBUG (kommenteret ud)
-# ---------------------------------------------------------
-
-# st.write("DEBUG – rå data (df):", len(df))
-# st.write(df.head(20))
-# st.write("DEBUG – filtreret data (df_all):", len(df_all))
-# st.write(df_all.head(20))
-# st.write("DEBUG – unikke ydelseskoder:", sorted(df_all["ydelseskode"].unique()))
+else:
+    st.info("👆 Upload venligst dit datasæt for at komme i gang")
+    st.markdown("""
+    ### Sådan bruges appen:
+    1. Upload dit Excel-datasæt
+    2. Vælg startmåned og -år for Periode 1
+    3. Vælg antal måneder (3, 6, 9 eller 12)
+    4. Se graferne opdateres automatisk
+    5. Download rapport som PDF
+    
+    **Dataformat:**
+    - Kolonner: Køn, Alder, Ydelseskode, Antal, Beløb, Ydelses dato, Bruger
+    - Kun data med Antal >= 1 medtages i analysen
+    """)
