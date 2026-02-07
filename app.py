@@ -20,21 +20,18 @@ def måned_label(år, måned):
 
 
 # ---------------------------------------------------------
-# DATAINDLÆSNING (datoer er allerede datetime!)
+# DATAINDLÆSNING
 # ---------------------------------------------------------
 
 def load_data(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
-    # Standardiser kolonnenavne
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    # Find kolonner
     kol_dato = [c for c in df.columns if "dato" in c][0]
     kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
     kol_antal = [c for c in df.columns if "antal" in c][0]
 
-    # Dato er allerede datetime64 – brug direkte
     if not pd.api.types.is_datetime64_any_dtype(df[kol_dato]):
         df[kol_dato] = pd.to_datetime(df[kol_dato], errors="coerce")
 
@@ -45,30 +42,31 @@ def load_data(uploaded_file):
     df["måned"] = df["dato"].dt.month
 
     df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
-    df["ydelseskode"] = df[kol_kode].astype(str).str.replace(r"\D", "", regex=True).str.zfill(4)
+
+    # Paddede ydelseskoder (meget vigtigt)
+    df["ydelseskode"] = (
+        df[kol_kode]
+        .astype(str)
+        .str.replace(r"\D", "", regex=True)
+        .str.zfill(4)
+    )
 
     return df
 
 
 # ---------------------------------------------------------
-# PERIODEFILTRERING (den rigtige måde)
+# PERIODEFILTRERING (PERIODE-NØGLE)
 # ---------------------------------------------------------
 
 def filtrer_perioder(df, start_month, start_year, months):
-    # Lav en periode-nøgle der stiger 1 pr. måned
     df["periode_key"] = df["år"] * 12 + df["måned"]
 
-    # Startnøgle
     start_key = start_year * 12 + start_month
-
-    # Slutnøgle
     slut_key = start_key + months - 1
 
-    # P1
     p1 = df[(df["periode_key"] >= start_key) & (df["periode_key"] <= slut_key)].copy()
     p1["periode"] = "P1"
 
-    # P2 (samme måneder året efter)
     p2_start_key = start_key + 12
     p2_slut_key = slut_key + 12
 
@@ -79,7 +77,7 @@ def filtrer_perioder(df, start_month, start_year, months):
 
 
 # ---------------------------------------------------------
-# GRAFER
+# GRAFER (med korrekt rækkefølge)
 # ---------------------------------------------------------
 
 def graf_stacked(df_all):
@@ -93,6 +91,11 @@ def graf_stacked(df_all):
         return None
 
     grp = df.groupby(["periode", "år", "måned", "gruppe"])["antal"].sum().reset_index()
+
+    # Sortering: M1-P1, M1-P2, M2-P1, M2-P2 ...
+    grp["sort_key"] = grp["måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
+    grp = grp.sort_values("sort_key")
+
     grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
     return px.bar(
@@ -111,6 +114,10 @@ def graf_ydelser(df_all, koder, title):
         return None
 
     grp = df.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
+
+    grp["sort_key"] = grp["måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
+    grp = grp.sort_values("sort_key")
+
     grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
     return px.bar(
@@ -169,26 +176,7 @@ if uploaded_file:
         months = st.selectbox("Antal måneder", [3, 6, 9, 12])
 
     df_all = filtrer_perioder(df, start_month, start_year, months)
-    #DEBUG START
-    st.write("DEBUG – unikke ydelseskoder i df_all:", sorted(df_all["ydelseskode"].unique()))
 
-    st.write("DEBUG – rå data (df):", len(df))
-    st.write(df[["dato", "år", "måned"]].head(20))
-
-    st.write("DEBUG – filtreret data (df_all):", len(df_all))
-    st.write(df_all[["dato", "år", "måned", "periode"]].head(20))
-
-    df_debug = df.copy()
-    df_debug["periode_key"] = df_debug["år"] * 12 + df_debug["måned"]
-    st.write("DEBUG – periode_key i rå data:", df_debug[["dato", "år", "måned", "periode_key"]].head(20))
-
-    start_key = start_year * 12 + start_month
-    slut_key = start_key + months - 1
-    st.write("DEBUG – start_key:", start_key)
-    st.write("DEBUG – slut_key:", slut_key)
-    st.write("DEBUG – p2_start_key:", start_key + 12)
-    st.write("DEBUG – p2_slut_key:", slut_key + 12)
-    #DEBUG SLUT
     figs = []
 
     for fig in [
@@ -207,3 +195,14 @@ if uploaded_file:
         st.download_button("Download PDF", data=pdf_bytes, file_name="ydelser.pdf", mime="application/pdf")
     except:
         st.info("PDF kunne ikke genereres i dette miljø.")
+
+
+# ---------------------------------------------------------
+# DEBUG (kommenteret ud – kan aktiveres ved behov)
+# ---------------------------------------------------------
+
+# st.write("DEBUG – rå data (df):", len(df))
+# st.write(df.head(20))
+# st.write("DEBUG – filtreret data (df_all):", len(df_all))
+# st.write(df_all.head(20))
+# st.write("DEBUG – unikke ydelseskoder:", sorted(df_all["ydelseskode"].unique()))
