@@ -76,9 +76,15 @@ def load_data(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    st.write("DEBUG – rå dato-kolonne:")
-    st.write(df[[kol_dato]].head(20))
+    kol_dato = [c for c in df.columns if "dato" in c][0]
+    kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
+    kol_antal = [c for c in df.columns if "antal" in c][0]
+
+    # DEBUG
+    st.write("DEBUG – rå dato-kolonne (før parsing):")
+    st.write(df[[kol_dato]].head(30))
     st.write("DEBUG – dtype:", df[kol_dato].dtype)
+
 
 
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
