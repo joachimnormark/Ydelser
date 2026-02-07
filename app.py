@@ -115,7 +115,15 @@ def stacked_ydelser(df1, df2, months, start_month, start_year):
     def prep(df, year):
         d120 = lav_månedsserie(df, ["0120"], "0120")
         d101_125 = lav_månedsserie(df, ["0101", "0125"], "0101_0125")
-        merged = pd.merge(d120, d101_125, on=["år", "måned"], how="outer").fillna(0)
+        merged = pd.merge(d120, d101_125, on=["år", "måned"], how="outer", suffixes=("", "_drop")).fillna(0)
+
+        # Fjern evt. dubletter fra merge
+        merged = merged[[c for c in merged.columns if not c.endswith("_drop")]]
+
+        # Sikr at år og måned er int
+        merged["år"] = merged["år"].astype(int)
+        merged["måned"] = merged["måned"].astype(int)
+
         merged["periode"] = year
         return merged
 
