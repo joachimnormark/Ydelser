@@ -74,6 +74,12 @@ def parse_dato(series):
 
 def load_data(uploaded_file):
     df = pd.read_excel(uploaded_file)
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+    st.write("DEBUG – rå dato-kolonne:")
+    st.write(df[[kol_dato]].head(20))
+    st.write("DEBUG – dtype:", df[kol_dato].dtype)
+
 
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
