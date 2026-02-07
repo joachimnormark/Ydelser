@@ -28,8 +28,13 @@ def load_data(uploaded_file):
         st.error("Kunne ikke finde en kolonne med dato i filen.")
         st.stop()
 
-    # Konverter Excel-dato
-    df["dato"] = pd.to_datetime(df[date_col], unit="d", origin="1899-12-30", errors="coerce")
+    # Robust dato-konvertering
+    try:
+        # Forsøg Excel-serienumre
+        df["dato"] = pd.to_datetime(df[date_col], unit="d", origin="1899-12-30")
+    except Exception:
+        # Hvis det fejler → prøv almindelig dato
+        df["dato"] = pd.to_datetime(df[date_col], errors="coerce")
 
     # Fjern ugyldige datoer
     df = df.dropna(subset=["dato"])
