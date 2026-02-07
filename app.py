@@ -4,9 +4,36 @@ import plotly.express as px
 from io import BytesIO
 from fpdf import FPDF
 import calendar
-import base64
 
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
+
+# ---------------------------------------------------------
+# Robust dato-konvertering
+# ---------------------------------------------------------
+
+def konverter_excel_datoer(series):
+    """
+    Konverterer en kolonne med Excel-seriedatoer til datetime.
+    Håndterer:
+    - ints
+    - floats
+    - tekst der ligner tal
+    - NaN
+    """
+
+    # Tving til numerisk
+    s = pd.to_numeric(series, errors="coerce")
+
+    # Fjern NaN
+    s = s.dropna()
+
+    # Hvis alt er NaN → returnér tom serie
+    if s.empty:
+        return pd.Series([pd.NaT] * len(series))
+
+    # Windows Excel-datoer (1900-systemet)
+    return pd.to_datetime(s, unit="d", origin="1899-12-30")
+
 
 # ---------------------------------------------------------
 # Dataindlæsning
@@ -15,28 +42,25 @@ st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 def load_data(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
+    # Standardiser kolonnenavne
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    date_col = None
-    for col in df.columns:
-        if "dato" in col:
-            date_col = col
-            break
+    # Find kolonner
+    kol_dato = [c for c in df.columns if "dato" in c][0]
+    kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
+    kol_antal = [c for c in df.columns if "antal" in c][0]
 
-    if date_col is None:
-        st.error("Ingen datokolonne fundet.")
-        st.stop()
+    # Konverter datoer
+    df["dato"] = konverter_excel_datoer(df[kol_dato])
 
-    try:
-        df["dato"] = pd.to_datetime(df[date_col], unit="d", origin="1899-12-30")
-    except Exception:
-        df["dato"] = pd.to_datetime(df[date_col], errors="coerce")
-
+    # Fjern rækker uden gyldig dato
     df = df.dropna(subset=["dato"])
 
+    # Ekstra kolonner
     df["år"] = df["dato"].dt.year
     df["måned"] = df["dato"].dt.month
 
+    # Ugedage på dansk
     df["ugedag"] = df["dato"].dt.day_name()
     oversæt = {
         "Monday": "Mandag",
@@ -49,17 +73,14 @@ def load_data(uploaded_file):
     }
     df["ugedag"] = df["ugedag"].map(oversæt)
 
-    if "antal" not in df.columns:
-        st.error("Kolonnen 'antal' mangler.")
-        st.stop()
+    # Antal
+    df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
 
-    df["antal"] = pd.to_numeric(df["antal"], errors="coerce").fillna(0)
-
-    if "ydelseskode" not in df.columns:
-        st.error("Kolonnen 'ydelseskode' mangler.")
-        st.stop()
+    # Ydelseskode
+    df["ydelseskode"] = df[kol_kode].astype(str)
 
     return df
+
 
 # ---------------------------------------------------------
 # Periodefiltrering
@@ -79,6 +100,7 @@ def filtrer_perioder(df, start_month, start_year, months):
     df_p2["periode"] = "P2"
 
     return pd.concat([df_p1, df_p2], ignore_index=True), p1_start, p1_slut, p2_start, p2_slut
+
 
 # ---------------------------------------------------------
 # Grafer
@@ -155,6 +177,7 @@ def graf_ugedage(df_all):
     )
     return fig
 
+
 # ---------------------------------------------------------
 # PDF uden Chrome/Kaleido
 # ---------------------------------------------------------
@@ -170,6 +193,7 @@ def lav_pdf(figures):
         pdf.multi_cell(0, 5, html)
 
     return pdf.output(dest="S").encode("latin1")
+
 
 # ---------------------------------------------------------
 # UI
