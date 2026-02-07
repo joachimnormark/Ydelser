@@ -8,7 +8,7 @@ import io
 from PIL import Image
 import base64
 
-# Konfiguration af siden
+# Konfiguration af siden 
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
 st.title("📊 Ydelsesanalyse - Periodesammenligning")
