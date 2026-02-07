@@ -8,7 +8,7 @@ import calendar
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
 # ---------------------------------------------------------
-# Robust dato-konvertering
+# ROBUST DATO-KONVERTERING
 # ---------------------------------------------------------
 
 def konverter_excel_datoer(series):
@@ -17,26 +17,32 @@ def konverter_excel_datoer(series):
     Håndterer:
     - ints
     - floats
-    - tekst der ligner tal
+    - tekst
+    - whitespace
+    - kommaer
+    - punktummer
     - NaN
     """
 
+    # Alt til tekst
+    s = series.astype(str)
+
+    # Fjern whitespace
+    s = s.str.strip()
+
+    # Fjern kommaer og punktummer
+    s = s.str.replace(",", "", regex=False)
+    s = s.str.replace(".", "", regex=False)
+
     # Tving til numerisk
-    s = pd.to_numeric(series, errors="coerce")
+    s = pd.to_numeric(s, errors="coerce")
 
-    # Fjern NaN
-    s = s.dropna()
-
-    # Hvis alt er NaN → returnér tom serie
-    if s.empty:
-        return pd.Series([pd.NaT] * len(series))
-
-    # Windows Excel-datoer (1900-systemet)
-    return pd.to_datetime(s, unit="d", origin="1899-12-30")
+    # Konverter fra Windows-Excel datoer
+    return pd.to_datetime(s, unit="d", origin="1899-12-30", errors="coerce")
 
 
 # ---------------------------------------------------------
-# Dataindlæsning
+# DATAINDLÆSNING
 # ---------------------------------------------------------
 
 def load_data(uploaded_file):
@@ -83,7 +89,7 @@ def load_data(uploaded_file):
 
 
 # ---------------------------------------------------------
-# Periodefiltrering
+# PERIODEFILTRERING
 # ---------------------------------------------------------
 
 def filtrer_perioder(df, start_month, start_year, months):
@@ -103,7 +109,7 @@ def filtrer_perioder(df, start_month, start_year, months):
 
 
 # ---------------------------------------------------------
-# Grafer
+# GRAFER
 # ---------------------------------------------------------
 
 def graf_stacked(df_all):
@@ -179,7 +185,7 @@ def graf_ugedage(df_all):
 
 
 # ---------------------------------------------------------
-# PDF uden Chrome/Kaleido
+# PDF UDEN CHROME/KALEIDO
 # ---------------------------------------------------------
 
 def lav_pdf(figures):
