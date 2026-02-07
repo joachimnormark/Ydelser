@@ -30,21 +30,18 @@ def load_data(uploaded_file):
 
     # Robust dato-konvertering
     try:
-        # Forsøg Excel-serienumre
         df["dato"] = pd.to_datetime(df[date_col], unit="d", origin="1899-12-30")
     except Exception:
-        # Hvis det fejler → prøv almindelig dato
         df["dato"] = pd.to_datetime(df[date_col], errors="coerce")
 
-    # Fjern ugyldige datoer
     df = df.dropna(subset=["dato"])
 
     # Ekstra kolonner
     df["år"] = df["dato"].dt.year
     df["måned"] = df["dato"].dt.month
-    df["ugedag"] = df["dato"].dt.day_name()
 
-    # Oversæt til dansk
+    # Ugedage på dansk (uden locale)
+    df["ugedag"] = df["dato"].dt.day_name()
     oversæt = {
         "Monday": "Mandag",
         "Tuesday": "Tirsdag",
@@ -54,11 +51,9 @@ def load_data(uploaded_file):
         "Saturday": "Lørdag",
         "Sunday": "Søndag",
     }
-
     df["ugedag"] = df["ugedag"].map(oversæt)
 
-
-    # Sikr at antal findes og er numerisk
+    # Antal skal være numerisk
     if "antal" not in df.columns:
         st.error("Kolonnen 'antal' mangler i datasættet.")
         st.stop()
@@ -110,7 +105,12 @@ def stacked_ydelser(df1, df2, months, start_month, start_year):
         rows.append((start_year, m, "P1"))
         rows.append((start_year + 1, m, "P2"))
 
-    data["sort"] = data.apply(lambda r: rows.index((r["år"], r["måned"], r["periode"])), axis=1)
+    # Robust sortering
+    def safe_index(row):
+        key = (row["år"], row["måned"], row["periode"])
+        return rows.index(key) if key in rows else 999
+
+    data["sort"] = data.apply(safe_index, axis=1)
     data = data.sort_values("sort")
 
     data["label"] = data.apply(lambda r: måned_label(r["måned"], r["år"]), axis=1)
@@ -142,7 +142,11 @@ def lav_søjlediagram(df1, df2, koder, title, months, start_month, start_year):
         rows.append((start_year, m, "P1"))
         rows.append((start_year + 1, m, "P2"))
 
-    data["sort"] = data.apply(lambda r: rows.index((r["år"], r["måned"], r["periode"])), axis=1)
+    def safe_index(row):
+        key = (row["år"], row["måned"], row["periode"])
+        return rows.index(key) if key in rows else 999
+
+    data["sort"] = data.apply(safe_index, axis=1)
     data = data.sort_values("sort")
 
     data["label"] = data.apply(lambda r: måned_label(r["måned"], r["år"]), axis=1)
@@ -156,7 +160,7 @@ def ugedagsgraf(df1, df2):
 
     def prep(df, year):
         d = df[df["ydelseskode"].isin(koder)]
-        d = d[d["ugedag"].isin(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])]
+        d = d[d["ugedag"].isin(["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"])]
         d = d.groupby("ugedag")["antal"].sum().reset_index(name="antal")
         d["periode"] = year
         return d
