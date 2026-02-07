@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from fpdf import FPDF
+import io
 
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
@@ -77,7 +78,7 @@ def filtrer_perioder(df, start_month, start_year, months):
 
 
 # ---------------------------------------------------------
-# GRAF: 0101 + 0120 + 0125 (stacked) + procenttal
+# GRAF: 0101 + 0120 + 0125 (stacked) + procenttal + 0120 nederst
 # ---------------------------------------------------------
 
 def graf_stacked(df_all, start_month):
@@ -112,6 +113,9 @@ def graf_stacked(df_all, start_month):
 
     grp = pd.merge(grp, pct[["periode", "år", "måned", "pct_0120"]], on=["periode", "år", "måned"], how="left")
 
+    # 0120 nederst i stacked
+    grp["gruppe"] = pd.Categorical(grp["gruppe"], categories=["0120", "0101+0125"], ordered=True)
+
     fig = px.bar(
         grp,
         x="label",
@@ -122,7 +126,14 @@ def graf_stacked(df_all, start_month):
         color_discrete_map={"0120": "red", "0101+0125": "steelblue"},
     )
 
-    # Tilføj procenttal som tekst under søjlerne
+    # Parvis tætstående søjler
+    for periode, offset in {"P1": -0.15, "P2": 0.15}.items():
+        fig.update_traces(
+            selector=lambda t: True,
+            offset=offset
+        )
+
+    # Procenttal under søjlerne
     for i, row in grp.iterrows():
         if row["gruppe"] == "0120":
             fig.add_annotation(
@@ -138,7 +149,7 @@ def graf_stacked(df_all, start_month):
 
 
 # ---------------------------------------------------------
-# GRAF: Øvrige ydelser
+# GRAF: Øvrige ydelser (parvis tætstående)
 # ---------------------------------------------------------
 
 def graf_ydelser(df_all, koder, title, start_month):
@@ -154,7 +165,7 @@ def graf_ydelser(df_all, koder, title, start_month):
 
     grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
-    return px.bar(
+    fig = px.bar(
         grp,
         x="label",
         y="antal",
@@ -163,9 +174,18 @@ def graf_ydelser(df_all, koder, title, start_month):
         title=title,
     )
 
+    # Parvis tætstående søjler
+    for periode, offset in {"P1": -0.15, "P2": 0.15}.items():
+        fig.update_traces(
+            selector=dict(name=periode),
+            offset=offset
+        )
+
+    return fig
+
 
 # ---------------------------------------------------------
-# PDF
+# PDF (virker i Streamlit Cloud)
 # ---------------------------------------------------------
 
 def lav_pdf(figures):
@@ -175,10 +195,13 @@ def lav_pdf(figures):
     for fig in figures:
         if fig is None:
             continue
-        html = fig.to_html()
+
+        buf = io.BytesIO()
+        fig.write_image(buf, format="png")
+        buf.seek(0)
+
         pdf.add_page()
-        pdf.set_font("Arial", size=8)
-        pdf.multi_cell(0, 4, html)
+        pdf.image(buf, x=10, y=10, w=180)
 
     return pdf.output(dest="S").encode("latin1")
 
