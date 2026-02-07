@@ -42,7 +42,21 @@ def load_data(uploaded_file):
     # Ekstra kolonner
     df["år"] = df["dato"].dt.year
     df["måned"] = df["dato"].dt.month
-    df["ugedag"] = df["dato"].dt.day_name(locale="da_DK")
+    df["ugedag"] = df["dato"].dt.day_name()
+
+    # Oversæt til dansk
+    oversæt = {
+        "Monday": "Mandag",
+        "Tuesday": "Tirsdag",
+        "Wednesday": "Onsdag",
+        "Thursday": "Torsdag",
+        "Friday": "Fredag",
+        "Saturday": "Lørdag",
+        "Sunday": "Søndag",
+    }
+
+    df["ugedag"] = df["ugedag"].map(oversæt)
+
 
     # Sikr at antal findes og er numerisk
     if "antal" not in df.columns:
@@ -151,7 +165,7 @@ def ugedagsgraf(df1, df2):
     p2 = prep(df2, "P2")
     data = pd.concat([p1, p2])
 
-    order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    order = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"]
     data["ugedag"] = pd.Categorical(data["ugedag"], order)
 
     fig = px.bar(data, x="ugedag", y="antal", color="periode", title="Fordeling på ugedage (0101+0120+0125)")
