@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 from fpdf import FPDF
 import io
 
@@ -44,7 +44,6 @@ def load_data(uploaded_file):
 
     df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
 
-    # Paddede ydelseskoder
     df["ydelseskode"] = (
         df[kol_kode]
         .astype(str)
@@ -56,7 +55,7 @@ def load_data(uploaded_file):
 
 
 # ---------------------------------------------------------
-# PERIODEFILTRERING (PERIODE-NØGLE)
+# PERIODEFILTRERING
 # ---------------------------------------------------------
 
 def filtrer_perioder(df, start_month, start_year, months):
@@ -78,7 +77,18 @@ def filtrer_perioder(df, start_month, start_year, months):
 
 
 # ---------------------------------------------------------
-# GRAF: 0101 + 0120 + 0125 (stacked) + procenttal + 0120 nederst
+# HJÆLPEFUNKTION: Numerisk x-akse + labels
+# ---------------------------------------------------------
+
+def lav_x_akse(grp, start_month):
+    grp["relativ_måned"] = (grp["måned"] - start_month) % 12
+    grp["x"] = grp["relativ_måned"] * 2 + grp["periode"].map({"P1": -0.2, "P2": 0.2})
+    grp["labelpos"] = grp["relativ_måned"] * 2
+    return grp
+
+
+# ---------------------------------------------------------
+# GRAF: 0101 + 0120 + 0125 (stacked)
 # ---------------------------------------------------------
 
 def graf_stacked(df_all, start_month):
@@ -94,12 +104,7 @@ def graf_stacked(df_all, start_month):
 
     grp = df.groupby(["periode", "år", "måned", "gruppe"])["antal"].sum().reset_index()
 
-    # Relativ måned
-    grp["relativ_måned"] = (grp["måned"] - start_month) % 12
-    grp["sort_key"] = grp["relativ_måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
-    grp = grp.sort_values("sort_key")
-
-    grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
+    grp = lav_x_akse(grp, start_month)
 
     # Beregn procentandel for 0120
     total = grp.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
@@ -113,37 +118,54 @@ def graf_stacked(df_all, start_month):
 
     grp = pd.merge(grp, pct[["periode", "år", "måned", "pct_0120"]], on=["periode", "år", "måned"], how="left")
 
-    # 0120 nederst i stacked
+    # 0120 nederst
     grp["gruppe"] = pd.Categorical(grp["gruppe"], categories=["0120", "0101+0125"], ordered=True)
 
-    fig = px.bar(
-        grp,
-        x="label",
-        y="antal",
-        color="gruppe",
-        barmode="stack",
-        title="0101 + 0120 + 0125 (stacked)",
-        color_discrete_map={"0120": "red", "0101+0125": "steelblue"},
+    fig = go.Figure()
+
+    # 0120 nederst (rød)
+    df_red = grp[grp["gruppe"] == "0120"]
+    fig.add_bar(
+        x=df_red["x"],
+        y=df_red["antal"],
+        name="0120",
+        marker_color="red",
     )
 
-    # Parvis tætstående søjler
-    for periode, offset in {"P1": -0.15, "P2": 0.15}.items():
-        fig.update_traces(
-            selector=lambda t: True,
-            offset=offset
+    # 0101+0125 øverst (blå)
+    df_blue = grp[grp["gruppe"] == "0101+0125"]
+    fig.add_bar(
+        x=df_blue["x"],
+        y=df_blue["antal"],
+        name="0101+0125",
+        marker_color="steelblue",
+    )
+
+    # Procenttal
+    for _, row in df_red.iterrows():
+        fig.add_annotation(
+            x=row["x"],
+            y=0,
+            text=f"{row['pct_0120']}%",
+            showarrow=False,
+            yshift=-20,
+            font=dict(size=10, color="red"),
         )
 
-    # Procenttal under søjlerne
-    for i, row in grp.iterrows():
-        if row["gruppe"] == "0120":
-            fig.add_annotation(
-                x=row["label"],
-                y=0,
-                text=f"{row['pct_0120']}%",
-                showarrow=False,
-                yshift=-20,
-                font=dict(size=10, color="red"),
-            )
+    # Labels
+    labels = grp.groupby("labelpos").first().reset_index()
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=labels["labelpos"],
+        ticktext=[måned_label(r["år"], r["måned"]) for _, r in labels.iterrows()],
+    )
+
+    fig.update_layout(
+        title="0101 + 0120 + 0125 (stacked)",
+        barmode="stack",
+        bargap=0.05,
+        height=500,
+    )
 
     return fig
 
@@ -159,27 +181,41 @@ def graf_ydelser(df_all, koder, title, start_month):
 
     grp = df.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
 
-    grp["relativ_måned"] = (grp["måned"] - start_month) % 12
-    grp["sort_key"] = grp["relativ_måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
-    grp = grp.sort_values("sort_key")
+    grp = lav_x_akse(grp, start_month)
 
-    grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
+    fig = go.Figure()
 
-    fig = px.bar(
-        grp,
-        x="label",
-        y="antal",
-        color="periode",
-        barmode="group",
-        title=title,
+    # P1 = blå
+    df_p1 = grp[grp["periode"] == "P1"]
+    fig.add_bar(
+        x=df_p1["x"],
+        y=df_p1["antal"],
+        name="P1",
+        marker_color="blue",
     )
 
-    # Parvis tætstående søjler
-    for periode, offset in {"P1": -0.15, "P2": 0.15}.items():
-        fig.update_traces(
-            selector=dict(name=periode),
-            offset=offset
-        )
+    # P2 = orange
+    df_p2 = grp[grp["periode"] == "P2"]
+    fig.add_bar(
+        x=df_p2["x"],
+        y=df_p2["antal"],
+        name="P2",
+        marker_color="orange",
+    )
+
+    labels = grp.groupby("labelpos").first().reset_index()
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=labels["labelpos"],
+        ticktext=[måned_label(r["år"], r["måned"]) for _, r in labels.iterrows()],
+    )
+
+    fig.update_layout(
+        title=title,
+        barmode="group",
+        bargap=0.05,
+        height=500,
+    )
 
     return fig
 
