@@ -8,7 +8,7 @@ import calendar
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
 # ---------------------------------------------------------
-# Hjælpefunktioner
+# Dataindlæsning
 # ---------------------------------------------------------
 
 def load_data(uploaded_file):
@@ -17,7 +17,7 @@ def load_data(uploaded_file):
     # Standardiser kolonnenavne
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    # Find dato-kolonnen
+    # Find dato-kolonne
     date_col = None
     for col in df.columns:
         if "dato" in col:
@@ -39,6 +39,7 @@ def load_data(uploaded_file):
     # Ekstra kolonner
     df["år"] = df["dato"].dt.year.astype(int)
     df["måned"] = df["dato"].dt.month.astype(int)
+    df["label"] = df["dato"].dt.strftime("%b %y")
 
     # Ugedage på dansk
     df["ugedag"] = df["dato"].dt.day_name()
@@ -60,140 +61,127 @@ def load_data(uploaded_file):
 
     df["antal"] = pd.to_numeric(df["antal"], errors="coerce").fillna(0)
 
+    # Ydelseskode skal findes
+    if "ydelseskode" not in df.columns:
+        st.error("Kolonnen 'ydelseskode' mangler i datasættet.")
+        st.stop()
+
     return df
 
+# ---------------------------------------------------------
+# Periodefiltrering
+# ---------------------------------------------------------
 
-def filtrer_periode(df, start_month, start_year, months):
+def filtrer_perioder(df, start_month, start_year, months):
     p1_start = pd.Timestamp(start_year, start_month, 1)
     p1_slut = p1_start + pd.DateOffset(months=months) - pd.DateOffset(days=1)
 
     p2_start = pd.Timestamp(start_year + 1, start_month, 1)
     p2_slut = p2_start + pd.DateOffset(months=months) - pd.DateOffset(days=1)
 
-    df1 = df[(df["dato"] >= p1_start) & (df["dato"] <= p1_slut)].copy()
-    df2 = df[(df["dato"] >= p2_start) & (df["dato"] <= p2_slut)].copy()
+    df_p1 = df[(df["dato"] >= p1_start) & (df["dato"] <= p1_slut)].copy()
+    df_p1["periode"] = "P1"
 
-    return df1, df2, p1_start, p1_slut, p2_start, p2_slut
+    df_p2 = df[(df["dato"] >= p2_start) & (df["dato"] <= p2_slut)].copy()
+    df_p2["periode"] = "P2"
 
+    df_all = pd.concat([df_p1, df_p2], ignore_index=True)
 
-def måned_label(m, y):
-    return f"{calendar.month_abbr[m]} {str(y)[-2:]}"
-
-
-def lav_månedsserie(df, koder, label):
-    d = df[df["ydelseskode"].isin(koder)]
-    d = d.groupby(["år", "måned"])["antal"].sum().reset_index(name=label)
-    return d
-
+    return df_all, p1_start, p1_slut, p2_start, p2_slut
 
 # ---------------------------------------------------------
-# ROBUST SORTERING (ALDRIG CRASH)
+# Grafer
 # ---------------------------------------------------------
 
-def lav_sorteringsnøgle(df, months, start_month, start_year):
-    rows = []
-    for i in range(months):
-        m = (start_month - 1 + i) % 12 + 1
-        rows.append((start_year, m, "P1"))
-        rows.append((start_year + 1, m, "P2"))
+def graf_stacked_0101_0120_0125(df_all):
+    # 0120 alene, 0101+0125 samlet
+    df = df_all.copy()
+    df["gruppe"] = None
+    df.loc[df["ydelseskode"] == "0120", "gruppe"] = "0120"
+    df.loc[df["ydelseskode"].isin(["0101", "0125"]), "gruppe"] = "0101+0125"
 
-    def safe_index(row):
-        key = (row["år"], row["måned"], row["periode"])
-        try:
-            return rows.index(key)
-        except ValueError:
-            return 999  # manglende måned/år/periode → læg sidst
+    df = df[df["gruppe"].notna()]
 
-    return safe_index
+    grp = (
+        df.groupby(["periode", "år", "måned", "label", "gruppe"])["antal"]
+        .sum()
+        .reset_index()
+    )
 
+    # Pivot så vi får kolonner: 0120, 0101+0125
+    pivot = grp.pivot_table(
+        index=["periode", "år", "måned", "label"],
+        columns="gruppe",
+        values="antal",
+        fill_value=0,
+    ).reset_index()
 
-# ---------------------------------------------------------
-# GRAF 1 – STACKED
-# ---------------------------------------------------------
+    # Sørg for kolonner findes
+    for col in ["0120", "0101+0125"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
 
-def stacked_ydelser(df1, df2, months, start_month, start_year):
-    def prep(df, year):
-        d120 = lav_månedsserie(df, ["0120"], "0120")
-        d101_125 = lav_månedsserie(df, ["0101", "0125"], "0101_0125")
-        merged = pd.merge(d120, d101_125, on=["år", "måned"], how="outer", suffixes=("", "_drop")).fillna(0)
-
-        # Fjern evt. dubletter fra merge
-        merged = merged[[c for c in merged.columns if not c.endswith("_drop")]]
-
-        # Sikr at år og måned er int
-        merged["år"] = merged["år"].astype(int)
-        merged["måned"] = merged["måned"].astype(int)
-
-        merged["periode"] = year
-        return merged
-
-    data = pd.concat([prep(df1, "P1"), prep(df2, "P2")], ignore_index=True)
-
-    # Sortering
-    safe_index = lav_sorteringsnøgle(data, months, start_month, start_year)
-    data["sort"] = data.apply(safe_index, axis=1)
-    data = data.sort_values("sort")
-
-    # Label
-    data["label"] = data.apply(lambda r: måned_label(r["måned"], r["år"]), axis=1)
+    # Sortér efter år, måned, periode
+    pivot = pivot.sort_values(["år", "måned", "periode"])
 
     fig = px.bar(
-        data,
+        pivot,
         x="label",
-        y=["0120", "0101_0125"],
+        y=["0120", "0101+0125"],
         title="0101 + 0120 + 0125 (stacked, 0120 nederst)",
-        color_discrete_map={"0120": "red", "0101_0125": "blue"},
+        color_discrete_map={"0120": "red", "0101+0125": "blue"},
     )
     return fig
 
 
-# ---------------------------------------------------------
-# ØVRIGE SØJLEDIAGRAMMER
-# ---------------------------------------------------------
+def graf_ydelser_pr_måned(df_all, koder, title):
+    df = df_all[df_all["ydelseskode"].isin(koder)].copy()
 
-def lav_søjlediagram(df1, df2, koder, title, months, start_month, start_year):
-    def prep(df, year):
-        d = lav_månedsserie(df, koder, "antal")
-        d["periode"] = year
-        return d
+    grp = (
+        df.groupby(["periode", "år", "måned", "label"])["antal"]
+        .sum()
+        .reset_index()
+    )
 
-    data = pd.concat([prep(df1, "P1"), prep(df2, "P2")], ignore_index=True)
+    grp = grp.sort_values(["år", "måned", "periode"])
 
-    safe_index = lav_sorteringsnøgle(data, months, start_month, start_year)
-    data["sort"] = data.apply(safe_index, axis=1)
-    data = data.sort_values("sort")
-
-    data["label"] = data.apply(lambda r: måned_label(r["måned"], r["år"]), axis=1)
-
-    fig = px.bar(data, x="label", y="antal", title=title, color="periode")
+    fig = px.bar(
+        grp,
+        x="label",
+        y="antal",
+        color="periode",
+        barmode="group",
+        title=title,
+    )
     return fig
 
 
-# ---------------------------------------------------------
-# UGEDAGSGRAF
-# ---------------------------------------------------------
-
-def ugedagsgraf(df1, df2):
+def graf_ugedage(df_all):
     koder = ["0101", "0120", "0125"]
+    df = df_all[df_all["ydelseskode"].isin(koder)].copy()
+    df = df[df["ugedag"].isin(["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"])]
 
-    def prep(df, year):
-        d = df[df["ydelseskode"].isin(koder)]
-        d = d[d["ugedag"].isin(["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"])]
-        d = d.groupby("ugedag")["antal"].sum().reset_index(name="antal")
-        d["periode"] = year
-        return d
-
-    data = pd.concat([prep(df1, "P1"), prep(df2, "P2")], ignore_index=True)
+    grp = (
+        df.groupby(["periode", "ugedag"])["antal"]
+        .sum()
+        .reset_index()
+    )
 
     order = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"]
-    data["ugedag"] = pd.Categorical(data["ugedag"], order)
+    grp["ugedag"] = pd.Categorical(grp["ugedag"], order)
 
-    fig = px.bar(data, x="ugedag", y="antal", color="periode", title="Fordeling på ugedage (0101+0120+0125)")
+    fig = px.bar(
+        grp,
+        x="ugedag",
+        y="antal",
+        color="periode",
+        barmode="group",
+        title="Fordeling på ugedage (0101+0120+0125)",
+    )
     return fig
 
-
 # ---------------------------------------------------------
-# PDF GENERERING
+# PDF
 # ---------------------------------------------------------
 
 def lav_pdf(figures):
@@ -209,9 +197,8 @@ def lav_pdf(figures):
 
     return pdf.output(dest="S").encode("latin1")
 
-
 # ---------------------------------------------------------
-# STREAMLIT UI
+# UI
 # ---------------------------------------------------------
 
 st.title("Analyse af ydelser")
@@ -220,13 +207,16 @@ uploaded_file = st.file_uploader("Upload Excel-fil", type=["xlsx"])
 
 if uploaded_file:
     df = load_data(uploaded_file)
-
     st.success("Fil indlæst!")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        start_month = st.selectbox("Startmåned", list(range(1, 13)), format_func=lambda m: calendar.month_name[m])
+        start_month = st.selectbox(
+            "Startmåned",
+            list(range(1, 13)),
+            format_func=lambda m: calendar.month_name[m],
+        )
 
     with col2:
         start_year = st.selectbox("Startår", sorted(df["år"].unique()))
@@ -234,7 +224,7 @@ if uploaded_file:
     with col3:
         months = st.selectbox("Antal måneder", [3, 6, 9, 12])
 
-    df1, df2, p1s, p1e, p2s, p2e = filtrer_periode(df, start_month, start_year, months)
+    df_all, p1s, p1e, p2s, p2e = filtrer_perioder(df, start_month, start_year, months)
 
     st.write(f"**Periode 1:** {p1s.date()} → {p1e.date()}")
     st.write(f"**Periode 2:** {p2s.date()} → {p2e.date()}")
@@ -243,29 +233,45 @@ if uploaded_file:
 
     figs = []
 
-    fig1 = stacked_ydelser(df1, df2, months, start_month, start_year)
+    # Stacked 0101/0120/0125
+    fig1 = graf_stacked_0101_0120_0125(df_all)
     st.plotly_chart(fig1, use_container_width=True)
     figs.append(fig1)
 
-    fig2 = lav_søjlediagram(df1, df2, ["2101"], "2101 pr. måned", months, start_month, start_year)
+    # 2101
+    fig2 = graf_ydelser_pr_måned(df_all, ["2101"], "2101 pr. måned")
     st.plotly_chart(fig2, use_container_width=True)
     figs.append(fig2)
 
-    fig3 = lav_søjlediagram(df1, df2, ["7156"], "7156 pr. måned", months, start_month, start_year)
+    # 7156
+    fig3 = graf_ydelser_pr_måned(df_all, ["7156"], "7156 pr. måned")
     st.plotly_chart(fig3, use_container_width=True)
     figs.append(fig3)
 
-    fig4 = lav_søjlediagram(df1, df2, ["2149"], "2149 pr. måned", months, start_month, start_year)
+    # 2149
+    fig4 = graf_ydelser_pr_måned(df_all, ["2149"], "2149 pr. måned")
     st.plotly_chart(fig4, use_container_width=True)
     figs.append(fig4)
 
-    fig5 = lav_søjlediagram(df1, df2, ["0411", "0421", "0431", "0491"], "0411+0421+0431+0491 pr. måned", months, start_month, start_year)
+    # 0411+0421+0431+0491
+    fig5 = graf_ydelser_pr_måned(
+        df_all,
+        ["0411", "0421", "0431", "0491"],
+        "0411+0421+0431+0491 pr. måned",
+    )
     st.plotly_chart(fig5, use_container_width=True)
     figs.append(fig5)
 
-    fig6 = ugedagsgraf(df1, df2)
+    # Ugedage
+    fig6 = graf_ugedage(df_all)
     st.plotly_chart(fig6, use_container_width=True)
     figs.append(fig6)
 
+    # PDF
     pdf_bytes = lav_pdf(figs)
-    st.download_button("Download PDF med alle grafer", data=pdf_bytes, file_name="ydelser.pdf", mime="application/pdf")
+    st.download_button(
+        "Download PDF med alle grafer",
+        data=pdf_bytes,
+        file_name="ydelser.pdf",
+        mime="application/pdf",
+    )
