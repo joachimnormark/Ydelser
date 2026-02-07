@@ -45,7 +45,7 @@ def load_data(uploaded_file):
     df["måned"] = df["dato"].dt.month
 
     df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
-    df["ydelseskode"] = df[kol_kode].astype(str)
+    df["ydelseskode"] = df[kol_kode].astype(str).str.replace(r"\D", "", regex=True).str.zfill(4)
 
     return df
 
