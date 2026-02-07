@@ -86,6 +86,31 @@ def lav_månedsserie(df, koder, label):
     return d
 
 
+# ---------------------------------------------------------
+# ROBUST SORTERING (ALDRIG CRASH)
+# ---------------------------------------------------------
+
+def lav_sorteringsnøgle(df, months, start_month, start_year):
+    rows = []
+    for i in range(months):
+        m = (start_month - 1 + i) % 12 + 1
+        rows.append((start_year, m, "P1"))
+        rows.append((start_year + 1, m, "P2"))
+
+    def safe_index(row):
+        key = (row["år"], row["måned"], row["periode"])
+        try:
+            return rows.index(key)
+        except ValueError:
+            return 999  # manglende måned/år/periode → læg sidst
+
+    return safe_index
+
+
+# ---------------------------------------------------------
+# GRAF 1 – STACKED
+# ---------------------------------------------------------
+
 def stacked_ydelser(df1, df2, months, start_month, start_year):
     def prep(df, year):
         d120 = lav_månedsserie(df, ["0120"], "0120")
@@ -94,25 +119,10 @@ def stacked_ydelser(df1, df2, months, start_month, start_year):
         merged["periode"] = year
         return merged
 
-    p1 = prep(df1, "P1")
-    p2 = prep(df2, "P2")
-    data = pd.concat([p1, p2], ignore_index=True)
+    data = pd.concat([prep(df1, "P1"), prep(df2, "P2")], ignore_index=True)
 
-    # Rækkefølge: M1-P1, M1-P2, M2-P1, M2-P2 ...
-    rows = []
-    for i in range(months):
-        m = (start_month - 1 + i) % 12 + 1
-        rows.append((start_year, m, "P1"))
-        rows.append((start_year + 1, m, "P2"))
-
-    # Filtrer kun rækker der findes i rows
-    data = data[data.apply(lambda r: (r["år"], r["måned"], r["periode"]) in rows, axis=1)]
-
-    # Robust sortering
-    def safe_index(row):
-        key = (row["år"], row["måned"], row["periode"])
-        return rows.index(key) if key in rows else 999
-
+    # Sortering
+    safe_index = lav_sorteringsnøgle(data, months, start_month, start_year)
     data["sort"] = data.apply(safe_index, axis=1)
     data = data.sort_values("sort")
 
@@ -126,9 +136,12 @@ def stacked_ydelser(df1, df2, months, start_month, start_year):
         title="0101 + 0120 + 0125 (stacked, 0120 nederst)",
         color_discrete_map={"0120": "red", "0101_0125": "blue"},
     )
-
     return fig
 
+
+# ---------------------------------------------------------
+# ØVRIGE SØJLEDIAGRAMMER
+# ---------------------------------------------------------
 
 def lav_søjlediagram(df1, df2, koder, title, months, start_month, start_year):
     def prep(df, year):
@@ -136,22 +149,9 @@ def lav_søjlediagram(df1, df2, koder, title, months, start_month, start_year):
         d["periode"] = year
         return d
 
-    p1 = prep(df1, "P1")
-    p2 = prep(df2, "P2")
-    data = pd.concat([p1, p2], ignore_index=True)
+    data = pd.concat([prep(df1, "P1"), prep(df2, "P2")], ignore_index=True)
 
-    rows = []
-    for i in range(months):
-        m = (start_month - 1 + i) % 12 + 1
-        rows.append((start_year, m, "P1"))
-        rows.append((start_year + 1, m, "P2"))
-
-    data = data[data.apply(lambda r: (r["år"], r["måned"], r["periode"]) in rows, axis=1)]
-
-    def safe_index(row):
-        key = (row["år"], row["måned"], row["periode"])
-        return rows.index(key) if key in rows else 999
-
+    safe_index = lav_sorteringsnøgle(data, months, start_month, start_year)
     data["sort"] = data.apply(safe_index, axis=1)
     data = data.sort_values("sort")
 
@@ -160,6 +160,10 @@ def lav_søjlediagram(df1, df2, koder, title, months, start_month, start_year):
     fig = px.bar(data, x="label", y="antal", title=title, color="periode")
     return fig
 
+
+# ---------------------------------------------------------
+# UGEDAGSGRAF
+# ---------------------------------------------------------
 
 def ugedagsgraf(df1, df2):
     koder = ["0101", "0120", "0125"]
@@ -171,9 +175,7 @@ def ugedagsgraf(df1, df2):
         d["periode"] = year
         return d
 
-    p1 = prep(df1, "P1")
-    p2 = prep(df2, "P2")
-    data = pd.concat([p1, p2], ignore_index=True)
+    data = pd.concat([prep(df1, "P1"), prep(df2, "P2")], ignore_index=True)
 
     order = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"]
     data["ugedag"] = pd.Categorical(data["ugedag"], order)
@@ -181,6 +183,10 @@ def ugedagsgraf(df1, df2):
     fig = px.bar(data, x="ugedag", y="antal", color="periode", title="Fordeling på ugedage (0101+0120+0125)")
     return fig
 
+
+# ---------------------------------------------------------
+# PDF GENERERING
+# ---------------------------------------------------------
 
 def lav_pdf(figures):
     pdf = FPDF()
@@ -197,7 +203,7 @@ def lav_pdf(figures):
 
 
 # ---------------------------------------------------------
-# Streamlit UI
+# STREAMLIT UI
 # ---------------------------------------------------------
 
 st.title("Analyse af ydelser")
