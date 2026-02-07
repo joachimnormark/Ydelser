@@ -43,7 +43,7 @@ def load_data(uploaded_file):
 
     df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
 
-    # Paddede ydelseskoder (meget vigtigt)
+    # Paddede ydelseskoder
     df["ydelseskode"] = (
         df[kol_kode]
         .astype(str)
@@ -77,11 +77,12 @@ def filtrer_perioder(df, start_month, start_year, months):
 
 
 # ---------------------------------------------------------
-# GRAFER (med korrekt rækkefølge)
+# GRAF: 0101 + 0120 + 0125 (stacked) + procenttal
 # ---------------------------------------------------------
 
-def graf_stacked(df_all):
+def graf_stacked(df_all, start_month):
     df = df_all.copy()
+
     df["gruppe"] = None
     df.loc[df["ydelseskode"] == "0120", "gruppe"] = "0120"
     df.loc[df["ydelseskode"].isin(["0101", "0125"]), "gruppe"] = "0101+0125"
@@ -92,30 +93,63 @@ def graf_stacked(df_all):
 
     grp = df.groupby(["periode", "år", "måned", "gruppe"])["antal"].sum().reset_index()
 
-    # Sortering: M1-P1, M1-P2, M2-P1, M2-P2 ...
-    grp["sort_key"] = grp["måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
+    # Relativ måned
+    grp["relativ_måned"] = (grp["måned"] - start_month) % 12
+    grp["sort_key"] = grp["relativ_måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
     grp = grp.sort_values("sort_key")
 
     grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
-    return px.bar(
+    # Beregn procentandel for 0120
+    total = grp.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
+    total = total.rename(columns={"antal": "total"})
+
+    df0120 = grp[grp["gruppe"] == "0120"][["periode", "år", "måned", "antal"]]
+    df0120 = df0120.rename(columns={"antal": "antal_0120"})
+
+    pct = pd.merge(total, df0120, on=["periode", "år", "måned"], how="left")
+    pct["pct_0120"] = (pct["antal_0120"] / pct["total"] * 100).round(1).fillna(0)
+
+    grp = pd.merge(grp, pct[["periode", "år", "måned", "pct_0120"]], on=["periode", "år", "måned"], how="left")
+
+    fig = px.bar(
         grp,
         x="label",
         y="antal",
         color="gruppe",
         barmode="stack",
         title="0101 + 0120 + 0125 (stacked)",
+        color_discrete_map={"0120": "red", "0101+0125": "steelblue"},
     )
 
+    # Tilføj procenttal som tekst under søjlerne
+    for i, row in grp.iterrows():
+        if row["gruppe"] == "0120":
+            fig.add_annotation(
+                x=row["label"],
+                y=0,
+                text=f"{row['pct_0120']}%",
+                showarrow=False,
+                yshift=-20,
+                font=dict(size=10, color="red"),
+            )
 
-def graf_ydelser(df_all, koder, title):
+    return fig
+
+
+# ---------------------------------------------------------
+# GRAF: Øvrige ydelser
+# ---------------------------------------------------------
+
+def graf_ydelser(df_all, koder, title, start_month):
     df = df_all[df_all["ydelseskode"].isin(koder)].copy()
     if df.empty:
         return None
 
     grp = df.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
 
-    grp["sort_key"] = grp["måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
+    grp["relativ_måned"] = (grp["måned"] - start_month) % 12
+    grp["sort_key"] = grp["relativ_måned"] * 10 + grp["periode"].map({"P1": 1, "P2": 2})
     grp = grp.sort_values("sort_key")
 
     grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
@@ -180,11 +214,11 @@ if uploaded_file:
     figs = []
 
     for fig in [
-        graf_stacked(df_all),
-        graf_ydelser(df_all, ["2101"], "2101 pr. måned"),
-        graf_ydelser(df_all, ["7156"], "7156 pr. måned"),
-        graf_ydelser(df_all, ["2149"], "2149 pr. måned"),
-        graf_ydelser(df_all, ["0411", "0421", "0431", "0491"], "0411+0421+0431+0491 pr. måned"),
+        graf_stacked(df_all, start_month),
+        graf_ydelser(df_all, ["2101"], "2101 pr. måned", start_month),
+        graf_ydelser(df_all, ["7156"], "7156 pr. måned", start_month),
+        graf_ydelser(df_all, ["2149"], "2149 pr. måned", start_month),
+        graf_ydelser(df_all, ["0411", "0421", "0431", "0491"], "0411+0421+0431+0491 pr. måned", start_month),
     ]:
         if fig:
             st.plotly_chart(fig, use_container_width=True)
@@ -198,7 +232,7 @@ if uploaded_file:
 
 
 # ---------------------------------------------------------
-# DEBUG (kommenteret ud – kan aktiveres ved behov)
+# DEBUG (kommenteret ud)
 # ---------------------------------------------------------
 
 # st.write("DEBUG – rå data (df):", len(df))
