@@ -8,12 +8,12 @@ import calendar
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
 # ---------------------------------------------------------
-# ROBUST DATO-KONVERTERING
+# SUPER-ROBUST DATO → ÅR/MÅNED (uden datetime)
 # ---------------------------------------------------------
 
-def konverter_excel_datoer(series):
+def excel_seriedato_til_aar_maaned(series):
     """
-    Konverterer en kolonne med Excel-seriedatoer til datetime.
+    Konverterer Excel-seriedatoer til år og måned uden at bruge datetime.
     Håndterer:
     - ints
     - floats
@@ -30,15 +30,25 @@ def konverter_excel_datoer(series):
     # Fjern whitespace
     s = s.str.strip()
 
-    # Fjern kommaer og punktummer
-    s = s.str.replace(",", "", regex=False)
+    # Fjern tusindtals-separatorer
     s = s.str.replace(".", "", regex=False)
+    s = s.str.replace(",", "", regex=False)
+
+    # Fjern alt der ikke er tal
+    s = s.str.replace(r"[^0-9]", "", regex=True)
 
     # Tving til numerisk
     s = pd.to_numeric(s, errors="coerce")
 
-    # Konverter fra Windows-Excel datoer
-    return pd.to_datetime(s, unit="d", origin="1899-12-30", errors="coerce")
+    # Excel 1900-systemet: dag 1 = 1899-12-31
+    base = pd.Timestamp("1899-12-30")
+    datoer = base + pd.to_timedelta(s, unit="D")
+
+    # Udtræk år og måned
+    aar = datoer.dt.year
+    maaned = datoer.dt.month
+
+    return aar, maaned
 
 
 # ---------------------------------------------------------
@@ -56,28 +66,11 @@ def load_data(uploaded_file):
     kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
     kol_antal = [c for c in df.columns if "antal" in c][0]
 
-    # Konverter datoer
-    df["dato"] = konverter_excel_datoer(df[kol_dato])
+    # Udtræk år og måned
+    df["år"], df["måned"] = excel_seriedato_til_aar_maaned(df[kol_dato])
 
     # Fjern rækker uden gyldig dato
-    df = df.dropna(subset=["dato"])
-
-    # Ekstra kolonner
-    df["år"] = df["dato"].dt.year
-    df["måned"] = df["dato"].dt.month
-
-    # Ugedage på dansk
-    df["ugedag"] = df["dato"].dt.day_name()
-    oversæt = {
-        "Monday": "Mandag",
-        "Tuesday": "Tirsdag",
-        "Wednesday": "Onsdag",
-        "Thursday": "Torsdag",
-        "Friday": "Fredag",
-        "Saturday": "Lørdag",
-        "Sunday": "Søndag",
-    }
-    df["ugedag"] = df["ugedag"].map(oversæt)
+    df = df.dropna(subset=["år", "måned"])
 
     # Antal
     df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
@@ -93,24 +86,30 @@ def load_data(uploaded_file):
 # ---------------------------------------------------------
 
 def filtrer_perioder(df, start_month, start_year, months):
-    p1_start = pd.Timestamp(start_year, start_month, 1)
-    p1_slut = p1_start + pd.DateOffset(months=months) - pd.DateOffset(days=1)
+    # Periode 1
+    p1 = df[
+        (df["år"] == start_year) &
+        (df["måned"].between(start_month, start_month + months - 1))
+    ].copy()
+    p1["periode"] = "P1"
 
-    p2_start = pd.Timestamp(start_year + 1, start_month, 1)
-    p2_slut = p2_start + pd.DateOffset(months=months) - pd.DateOffset(days=1)
+    # Periode 2
+    p2 = df[
+        (df["år"] == start_year + 1) &
+        (df["måned"].between(start_month, start_month + months - 1))
+    ].copy()
+    p2["periode"] = "P2"
 
-    df_p1 = df[(df["dato"] >= p1_start) & (df["dato"] <= p1_slut)].copy()
-    df_p1["periode"] = "P1"
-
-    df_p2 = df[(df["dato"] >= p2_start) & (df["dato"] <= p2_slut)].copy()
-    df_p2["periode"] = "P2"
-
-    return pd.concat([df_p1, df_p2], ignore_index=True), p1_start, p1_slut, p2_start, p2_slut
+    return pd.concat([p1, p2], ignore_index=True)
 
 
 # ---------------------------------------------------------
 # GRAFER
 # ---------------------------------------------------------
+
+def måned_label(år, måned):
+    return f"{calendar.month_abbr[måned]} {str(år)[-2:]}"
+
 
 def graf_stacked(df_all):
     df = df_all.copy()
@@ -119,73 +118,56 @@ def graf_stacked(df_all):
     df.loc[df["ydelseskode"].isin(["0101", "0125"]), "gruppe"] = "0101+0125"
     df = df[df["gruppe"].notna()]
 
-    grp = df.groupby(["periode", "dato", "gruppe"])["antal"].sum().reset_index()
-
-    pivot = grp.pivot_table(
-        index=["periode", "dato"],
-        columns="gruppe",
-        values="antal",
-        fill_value=0
-    ).reset_index()
-
-    for col in ["0120", "0101+0125"]:
-        if col not in pivot.columns:
-            pivot[col] = 0
-
-    pivot = pivot.sort_values("dato")
+    grp = df.groupby(["periode", "år", "måned", "gruppe"])["antal"].sum().reset_index()
+    grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
     fig = px.bar(
-        pivot,
-        x="dato",
-        y=["0120", "0101+0125"],
-        title="0101 + 0120 + 0125 (stacked)",
-        color_discrete_map={"0120": "red", "0101+0125": "blue"},
+        grp,
+        x="label",
+        y="antal",
+        color="gruppe",
+        barmode="stack",
+        title="0101 + 0120 + 0125 (stacked)"
     )
-
-    fig.update_xaxes(tickformat="%b %y")
     return fig
 
 
 def graf_ydelser(df_all, koder, title):
     df = df_all[df_all["ydelseskode"].isin(koder)].copy()
 
-    grp = df.groupby(["periode", "dato"])["antal"].sum().reset_index()
-    grp = grp.sort_values("dato")
+    grp = df.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
+    grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
     fig = px.bar(
         grp,
-        x="dato",
+        x="label",
         y="antal",
         color="periode",
-        title=title,
-        barmode="group"
+        barmode="group",
+        title=title
     )
-
-    fig.update_xaxes(tickformat="%b %y")
     return fig
 
 
 def graf_ugedage(df_all):
     df = df_all[df_all["ydelseskode"].isin(["0101", "0120", "0125"])].copy()
-    df = df[df["ugedag"].isin(["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"])]
 
-    grp = df.groupby(["periode", "ugedag"])["antal"].sum().reset_index()
-
-    order = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"]
-    grp["ugedag"] = pd.Categorical(grp["ugedag"], order)
+    grp = df.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
+    grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
     fig = px.bar(
         grp,
-        x="ugedag",
+        x="label",
         y="antal",
         color="periode",
+        barmode="group",
         title="Fordeling på ugedage"
     )
     return fig
 
 
 # ---------------------------------------------------------
-# PDF UDEN CHROME/KALEIDO
+# PDF (uden Chrome/Kaleido)
 # ---------------------------------------------------------
 
 def lav_pdf(figures):
@@ -223,10 +205,7 @@ if uploaded_file:
     with col3:
         months = st.selectbox("Antal måneder", [3, 6, 9, 12])
 
-    df_all, p1s, p1e, p2s, p2e = filtrer_perioder(df, start_month, start_year, months)
-
-    st.write(f"**Periode 1:** {p1s.date()} → {p1e.date()}")
-    st.write(f"**Periode 2:** {p2s.date()} → {p2e.date()}")
+    df_all = filtrer_perioder(df, start_month, start_year, months)
 
     figs = []
 
