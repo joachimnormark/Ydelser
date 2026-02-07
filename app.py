@@ -3,11 +3,12 @@ import pandas as pd
 import plotly.express as px
 from fpdf import FPDF
 import calendar
+import re
 
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
 # ---------------------------------------------------------
-# Hjælpere
+# DANSKE MÅNEDER
 # ---------------------------------------------------------
 
 DANSKE_MÅNEDER_KORT = {
@@ -16,122 +17,113 @@ DANSKE_MÅNEDER_KORT = {
     9: "sep", 10: "okt", 11: "nov", 12: "dec",
 }
 
-DANSKE_UGEDAGE = {
-    "Monday": "Mandag",
-    "Tuesday": "Tirsdag",
-    "Wednesday": "Onsdag",
-    "Thursday": "Torsdag",
-    "Friday": "Fredag",
-    "Saturday": "Lørdag",
-    "Sunday": "Søndag",
-}
-
 def måned_label(år, måned):
-    return f"{DANSKE_MÅNEDER_KORT.get(måned, '')} {str(int(år))[-2:]}"
+    return f"{DANSKE_MÅNEDER_KORT[måned]} {str(int(år))[-2:]}"
 
 
 # ---------------------------------------------------------
-# Robust dato-konvertering (Excel-serietal → datetime)
+# ROBUST PARSER FOR dd.mm.yy OG ddmmyy
 # ---------------------------------------------------------
 
-def konverter_excel_dato(series):
-    # Alt til numerisk
-    s = pd.to_numeric(series, errors="coerce")
+def parse_dato(series):
+    cleaned = series.astype(str).str.strip()
 
-    # Filtrér til realistisk interval (2009–2070 ca.)
-    mask = (s >= 40000) & (s <= 60000)
-    s = s.where(mask)
+    # Fjern alt undtagen tal og punktummer
+    cleaned = cleaned.str.replace(r"[^0-9\.]", "", regex=True)
 
-    # Konverter til datetime, men uden at crashe
-    datoer = pd.to_datetime(s, unit="d", origin="1899-12-30", errors="coerce")
-    return datoer
+    parsed_dates = []
+
+    for value in cleaned:
+        if value == "":
+            parsed_dates.append(pd.NaT)
+            continue
+
+        # CASE 1: ddmmyy (fx 020124)
+        if re.fullmatch(r"\d{6}", value):
+            try:
+                d = value[:2]
+                m = value[2:4]
+                y = value[4:]
+                y = "20" + y  # 24 → 2024
+                parsed_dates.append(pd.to_datetime(f"{d}.{m}.{y}", format="%d.%m.%Y"))
+                continue
+            except:
+                parsed_dates.append(pd.NaT)
+                continue
+
+        # CASE 2: dd.mm.yy eller d.m.yy
+        try:
+            parsed_dates.append(pd.to_datetime(value, format="%d.%m.%y"))
+            continue
+        except:
+            pass
+
+        # CASE 3: dd.mm.yyyy
+        try:
+            parsed_dates.append(pd.to_datetime(value, format="%d.%m.%Y"))
+            continue
+        except:
+            parsed_dates.append(pd.NaT)
+
+    return pd.to_datetime(parsed_dates, errors="coerce")
 
 
 # ---------------------------------------------------------
-# Dataindlæsning
+# DATAINDLÆSNING
 # ---------------------------------------------------------
 
 def load_data(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
-    # Standardiser kolonnenavne
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    # Find kolonner
-    dato_cols = [c for c in df.columns if "dato" in c]
-    if not dato_cols:
-        st.error("Kunne ikke finde en kolonne med 'dato' i navnet.")
-        st.stop()
-    kol_dato = dato_cols[0]
+    kol_dato = [c for c in df.columns if "dato" in c][0]
+    kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
+    kol_antal = [c for c in df.columns if "antal" in c][0]
 
-    kode_cols = [c for c in df.columns if "ydelseskode" in c]
-    if not kode_cols:
-        st.error("Kunne ikke finde en kolonne med 'ydelseskode' i navnet.")
-        st.stop()
-    kol_kode = kode_cols[0]
-
-    antal_cols = [c for c in df.columns if "antal" in c]
-    if not antal_cols:
-        st.error("Kunne ikke finde en kolonne med 'antal' i navnet.")
-        st.stop()
-    kol_antal = antal_cols[0]
-
-    # Dato
-    df["dato"] = konverter_excel_dato(df[kol_dato])
+    df["dato"] = parse_dato(df[kol_dato])
     df = df.dropna(subset=["dato"])
 
     if df.empty:
         st.error("Ingen gyldige datoer kunne konverteres fra filen.")
         st.stop()
 
-    df["år"] = df["dato"].dt.year.astype(int)
-    df["måned"] = df["dato"].dt.month.astype(int)
+    df["år"] = df["dato"].dt.year
+    df["måned"] = df["dato"].dt.month
 
-    # Ugedage (hvis du får brug for det senere)
-    df["ugedag"] = df["dato"].dt.day_name().map(DANSKE_UGEDAGE)
-
-    # Antal
     df["antal"] = pd.to_numeric(df[kol_antal], errors="coerce").fillna(0)
-
-    # Ydelseskode
     df["ydelseskode"] = df[kol_kode].astype(str)
 
     return df
 
 
 # ---------------------------------------------------------
-# Periodefiltrering (år/måned)
+# PERIODEFILTRERING
 # ---------------------------------------------------------
 
 def filtrer_perioder(df, start_month, start_year, months):
     slut_month = start_month + months - 1
 
-    # P1
     p1 = df[
         (df["år"] == start_year) &
         (df["måned"].between(start_month, slut_month))
     ].copy()
     p1["periode"] = "P1"
 
-    # P2
     p2 = df[
         (df["år"] == start_year + 1) &
         (df["måned"].between(start_month, slut_month))
     ].copy()
     p2["periode"] = "P2"
 
-    df_all = pd.concat([p1, p2], ignore_index=True)
-
-    if df_all.empty:
-        st.warning("Ingen data i de valgte perioder.")
-    return df_all
+    return pd.concat([p1, p2], ignore_index=True)
 
 
 # ---------------------------------------------------------
-# Grafer (x-akse = måned/år-label)
+# GRAFER
 # ---------------------------------------------------------
 
-def graf_stacked_0101_0120_0125(df_all):
+def graf_stacked(df_all):
     df = df_all.copy()
     df["gruppe"] = None
     df.loc[df["ydelseskode"] == "0120", "gruppe"] = "0120"
@@ -141,14 +133,10 @@ def graf_stacked_0101_0120_0125(df_all):
     if df.empty:
         return None
 
-    grp = (
-        df.groupby(["periode", "år", "måned", "gruppe"])["antal"]
-        .sum()
-        .reset_index()
-    )
+    grp = df.groupby(["periode", "år", "måned", "gruppe"])["antal"].sum().reset_index()
     grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
-    fig = px.bar(
+    return px.bar(
         grp,
         x="label",
         y="antal",
@@ -156,22 +144,17 @@ def graf_stacked_0101_0120_0125(df_all):
         barmode="stack",
         title="0101 + 0120 + 0125 (stacked)",
     )
-    return fig
 
 
-def graf_ydelser_pr_måned(df_all, koder, title):
+def graf_ydelser(df_all, koder, title):
     df = df_all[df_all["ydelseskode"].isin(koder)].copy()
     if df.empty:
         return None
 
-    grp = (
-        df.groupby(["periode", "år", "måned"])["antal"]
-        .sum()
-        .reset_index()
-    )
+    grp = df.groupby(["periode", "år", "måned"])["antal"].sum().reset_index()
     grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
 
-    fig = px.bar(
+    return px.bar(
         grp,
         x="label",
         y="antal",
@@ -179,34 +162,10 @@ def graf_ydelser_pr_måned(df_all, koder, title):
         barmode="group",
         title=title,
     )
-    return fig
-
-
-def graf_ugedage(df_all):
-    df = df_all[df_all["ydelseskode"].isin(["0101", "0120", "0125"])].copy()
-    if df.empty:
-        return None
-
-    grp = (
-        df.groupby(["periode", "år", "måned"])["antal"]
-        .sum()
-        .reset_index()
-    )
-    grp["label"] = grp.apply(lambda r: måned_label(r["år"], r["måned"]), axis=1)
-
-    fig = px.bar(
-        grp,
-        x="label",
-        y="antal",
-        color="periode",
-        barmode="group",
-        title="Fordeling på ugedage (månedssummer)",
-    )
-    return fig
 
 
 # ---------------------------------------------------------
-# PDF (simpel, tekstbaseret)
+# PDF
 # ---------------------------------------------------------
 
 def lav_pdf(figures):
@@ -245,63 +204,28 @@ if uploaded_file:
         )
 
     with col2:
-        år_values = sorted(df["år"].unique())
-        if not år_values:
-            st.error("Ingen gyldige år fundet i data.")
-            st.stop()
-        start_year = st.selectbox("Startår", år_values)
+        start_year = st.selectbox("Startår", sorted(df["år"].unique()))
 
     with col3:
         months = st.selectbox("Antal måneder", [3, 6, 9, 12])
 
     df_all = filtrer_perioder(df, start_month, start_year, months)
 
-    if df_all.empty:
-        st.stop()
-
     figs = []
 
-    fig1 = graf_stacked_0101_0120_0125(df_all)
-    if fig1:
-        st.plotly_chart(fig1, use_container_width=True)
-        figs.append(fig1)
-
-    fig2 = graf_ydelser_pr_måned(df_all, ["2101"], "2101 pr. måned")
-    if fig2:
-        st.plotly_chart(fig2, use_container_width=True)
-        figs.append(fig2)
-
-    fig3 = graf_ydelser_pr_måned(df_all, ["7156"], "7156 pr. måned")
-    if fig3:
-        st.plotly_chart(fig3, use_container_width=True)
-        figs.append(fig3)
-
-    fig4 = graf_ydelser_pr_måned(df_all, ["2149"], "2149 pr. måned")
-    if fig4:
-        st.plotly_chart(fig4, use_container_width=True)
-        figs.append(fig4)
-
-    fig5 = graf_ydelser_pr_måned(
-        df_all,
-        ["0411", "0421", "0431", "0491"],
-        "0411+0421+0431+0491 pr. måned",
-    )
-    if fig5:
-        st.plotly_chart(fig5, use_container_width=True)
-        figs.append(fig5)
-
-    fig6 = graf_ugedage(df_all)
-    if fig6:
-        st.plotly_chart(fig6, use_container_width=True)
-        figs.append(fig6)
+    for fig in [
+        graf_stacked(df_all),
+        graf_ydelser(df_all, ["2101"], "2101 pr. måned"),
+        graf_ydelser(df_all, ["7156"], "7156 pr. måned"),
+        graf_ydelser(df_all, ["2149"], "2149 pr. måned"),
+        graf_ydelser(df_all, ["0411", "0421", "0431", "0491"], "0411+0421+0431+0491 pr. måned"),
+    ]:
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+            figs.append(fig)
 
     try:
         pdf_bytes = lav_pdf(figs)
-        st.download_button(
-            "Download PDF",
-            data=pdf_bytes,
-            file_name="ydelser.pdf",
-            mime="application/pdf",
-        )
-    except Exception:
+        st.download_button("Download PDF", data=pdf_bytes, file_name="ydelser.pdf", mime="application/pdf")
+    except:
         st.info("PDF kunne ikke genereres i dette miljø.")
