@@ -94,12 +94,10 @@ def filtrer_perioder(df, start_month, start_year, months):
 # ---------------------------------------------------------
 
 def graf_stacked_0101_0120_0125(df_all):
-    # 0120 alene, 0101+0125 samlet
     df = df_all.copy()
     df["gruppe"] = None
     df.loc[df["ydelseskode"] == "0120", "gruppe"] = "0120"
     df.loc[df["ydelseskode"].isin(["0101", "0125"]), "gruppe"] = "0101+0125"
-
     df = df[df["gruppe"].notna()]
 
     grp = (
@@ -108,7 +106,6 @@ def graf_stacked_0101_0120_0125(df_all):
         .reset_index()
     )
 
-    # Pivot så vi får kolonner: 0120, 0101+0125
     pivot = grp.pivot_table(
         index=["periode", "år", "måned", "label"],
         columns="gruppe",
@@ -116,12 +113,10 @@ def graf_stacked_0101_0120_0125(df_all):
         fill_value=0,
     ).reset_index()
 
-    # Sørg for kolonner findes
     for col in ["0120", "0101+0125"]:
         if col not in pivot.columns:
             pivot[col] = 0
 
-    # Sortér efter år, måned, periode
     pivot = pivot.sort_values(["år", "måned", "periode"])
 
     fig = px.bar(
@@ -181,7 +176,7 @@ def graf_ugedage(df_all):
     return fig
 
 # ---------------------------------------------------------
-# PDF
+# PDF – failsafe (ingen crash hvis Plotly/Kaleido mangler)
 # ---------------------------------------------------------
 
 def lav_pdf(figures):
@@ -191,6 +186,7 @@ def lav_pdf(figures):
     for fig in figures:
         pdf.add_page()
         img = BytesIO()
+        # Denne del kan fejle hvis Plotly/Kaleido ikke har en engine
         fig.write_image(img, format="png")
         img.seek(0)
         pdf.image(img, x=10, y=10, w=180)
@@ -233,27 +229,22 @@ if uploaded_file:
 
     figs = []
 
-    # Stacked 0101/0120/0125
     fig1 = graf_stacked_0101_0120_0125(df_all)
     st.plotly_chart(fig1, use_container_width=True)
     figs.append(fig1)
 
-    # 2101
     fig2 = graf_ydelser_pr_måned(df_all, ["2101"], "2101 pr. måned")
     st.plotly_chart(fig2, use_container_width=True)
     figs.append(fig2)
 
-    # 7156
     fig3 = graf_ydelser_pr_måned(df_all, ["7156"], "7156 pr. måned")
     st.plotly_chart(fig3, use_container_width=True)
     figs.append(fig3)
 
-    # 2149
     fig4 = graf_ydelser_pr_måned(df_all, ["2149"], "2149 pr. måned")
     st.plotly_chart(fig4, use_container_width=True)
     figs.append(fig4)
 
-    # 0411+0421+0431+0491
     fig5 = graf_ydelser_pr_måned(
         df_all,
         ["0411", "0421", "0431", "0491"],
@@ -262,16 +253,21 @@ if uploaded_file:
     st.plotly_chart(fig5, use_container_width=True)
     figs.append(fig5)
 
-    # Ugedage
     fig6 = graf_ugedage(df_all)
     st.plotly_chart(fig6, use_container_width=True)
     figs.append(fig6)
 
-    # PDF
-    pdf_bytes = lav_pdf(figs)
-    st.download_button(
-        "Download PDF med alle grafer",
-        data=pdf_bytes,
-        file_name="ydelser.pdf",
-        mime="application/pdf",
-    )
+    # PDF – prøv, men lad ikke appen crashe
+    try:
+        pdf_bytes = lav_pdf(figs)
+        st.download_button(
+            "Download PDF med alle grafer",
+            data=pdf_bytes,
+            file_name="ydelser.pdf",
+            mime="application/pdf",
+        )
+    except Exception:
+        st.info(
+            "PDF-generering er ikke tilgængelig i dette miljø (Plotly/Kaleido mangler en grafik‑engine). "
+            "Graferne kan stadig ses og evt. gemmes manuelt."
+        )
