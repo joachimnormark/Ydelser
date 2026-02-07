@@ -37,10 +37,10 @@ def load_data(uploaded_file):
     df = df.dropna(subset=["dato"])
 
     # Ekstra kolonner
-    df["år"] = df["dato"].dt.year
-    df["måned"] = df["dato"].dt.month
+    df["år"] = df["dato"].dt.year.astype(int)
+    df["måned"] = df["dato"].dt.month.astype(int)
 
-    # Ugedage på dansk (uden locale)
+    # Ugedage på dansk
     df["ugedag"] = df["dato"].dt.day_name()
     oversæt = {
         "Monday": "Mandag",
@@ -96,7 +96,7 @@ def stacked_ydelser(df1, df2, months, start_month, start_year):
 
     p1 = prep(df1, "P1")
     p2 = prep(df2, "P2")
-    data = pd.concat([p1, p2])
+    data = pd.concat([p1, p2], ignore_index=True)
 
     # Rækkefølge: M1-P1, M1-P2, M2-P1, M2-P2 ...
     rows = []
@@ -104,6 +104,9 @@ def stacked_ydelser(df1, df2, months, start_month, start_year):
         m = (start_month - 1 + i) % 12 + 1
         rows.append((start_year, m, "P1"))
         rows.append((start_year + 1, m, "P2"))
+
+    # Filtrer kun rækker der findes i rows
+    data = data[data.apply(lambda r: (r["år"], r["måned"], r["periode"]) in rows, axis=1)]
 
     # Robust sortering
     def safe_index(row):
@@ -113,6 +116,7 @@ def stacked_ydelser(df1, df2, months, start_month, start_year):
     data["sort"] = data.apply(safe_index, axis=1)
     data = data.sort_values("sort")
 
+    # Label
     data["label"] = data.apply(lambda r: måned_label(r["måned"], r["år"]), axis=1)
 
     fig = px.bar(
@@ -134,13 +138,15 @@ def lav_søjlediagram(df1, df2, koder, title, months, start_month, start_year):
 
     p1 = prep(df1, "P1")
     p2 = prep(df2, "P2")
-    data = pd.concat([p1, p2])
+    data = pd.concat([p1, p2], ignore_index=True)
 
     rows = []
     for i in range(months):
         m = (start_month - 1 + i) % 12 + 1
         rows.append((start_year, m, "P1"))
         rows.append((start_year + 1, m, "P2"))
+
+    data = data[data.apply(lambda r: (r["år"], r["måned"], r["periode"]) in rows, axis=1)]
 
     def safe_index(row):
         key = (row["år"], row["måned"], row["periode"])
@@ -167,7 +173,7 @@ def ugedagsgraf(df1, df2):
 
     p1 = prep(df1, "P1")
     p2 = prep(df2, "P2")
-    data = pd.concat([p1, p2])
+    data = pd.concat([p1, p2], ignore_index=True)
 
     order = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"]
     data["ugedag"] = pd.Categorical(data["ugedag"], order)
