@@ -130,6 +130,7 @@ def graf_stacked(df_all, start_month):
         y=df_red["antal"],
         name="0120",
         marker_color="red",
+        width=0.8,   # søjlebredde
     )
 
     # 0101+0125 øverst (blå)
@@ -139,6 +140,7 @@ def graf_stacked(df_all, start_month):
         y=df_blue["antal"],
         name="0101+0125",
         marker_color="steelblue",
+        width=0.8,   # bredere søjler
     )
 
     # Procenttal
@@ -192,6 +194,7 @@ def graf_ydelser(df_all, koder, title, start_month):
         y=df_p1["antal"],
         name="P1",
         marker_color="blue",
+        width=0.8,   # bredere søjler
     )
 
     # P2 = orange
@@ -200,7 +203,8 @@ def graf_ydelser(df_all, koder, title, start_month):
         x=df_p2["x"],
         y=df_p2["antal"],
         name="P2",
-        marker_color="orange",
+        marker_color="blue",
+        width=0.8,   # bredere søjler
     )
 
     labels = grp.groupby("labelpos").first().reset_index()
@@ -232,14 +236,17 @@ def lav_pdf(figures):
         if fig is None:
             continue
 
-        buf = io.BytesIO()
-        fig.write_image(buf, format="png")
+        # Gem figur som PNG uden Kaleido
+        img_bytes = fig.to_image(format="png")
+
+        buf = io.BytesIO(img_bytes)
         buf.seek(0)
 
         pdf.add_page()
         pdf.image(buf, x=10, y=10, w=180)
 
     return pdf.output(dest="S").encode("latin1")
+
 
 
 # ---------------------------------------------------------
