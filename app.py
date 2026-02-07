@@ -56,21 +56,28 @@ def load_data(uploaded_file):
 # ---------------------------------------------------------
 
 def filtrer_perioder(df, start_month, start_year, months):
-    slut_month = start_month + months - 1
+    # Lav en periode-nøgle der stiger 1 pr. måned
+    df["periode_key"] = df["år"] * 12 + df["måned"]
 
-    p1 = df[
-        (df["år"] == start_year) &
-        (df["måned"].between(start_month, slut_month))
-    ].copy()
+    # Startnøgle
+    start_key = start_year * 12 + start_month
+
+    # Slutnøgle
+    slut_key = start_key + months - 1
+
+    # P1
+    p1 = df[(df["periode_key"] >= start_key) & (df["periode_key"] <= slut_key)].copy()
     p1["periode"] = "P1"
 
-    p2 = df[
-        (df["år"] == start_year + 1) &
-        (df["måned"].between(start_month, slut_month))
-    ].copy()
+    # P2 (samme måneder året efter)
+    p2_start_key = start_key + 12
+    p2_slut_key = slut_key + 12
+
+    p2 = df[(df["periode_key"] >= p2_start_key) & (df["periode_key"] <= p2_slut_key)].copy()
     p2["periode"] = "P2"
 
     return pd.concat([p1, p2], ignore_index=True)
+
 
 
 # ---------------------------------------------------------
