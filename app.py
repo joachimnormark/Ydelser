@@ -169,7 +169,24 @@ if uploaded_file:
         months = st.selectbox("Antal måneder", [3, 6, 9, 12])
 
     df_all = filtrer_perioder(df, start_month, start_year, months)
+    #DEBUG START
+    st.write("DEBUG – rå data (df):", len(df))
+    st.write(df[["dato", "år", "måned"]].head(20))
 
+    st.write("DEBUG – filtreret data (df_all):", len(df_all))
+    st.write(df_all[["dato", "år", "måned", "periode"]].head(20))
+
+    df_debug = df.copy()
+    df_debug["periode_key"] = df_debug["år"] * 12 + df_debug["måned"]
+    st.write("DEBUG – periode_key i rå data:", df_debug[["dato", "år", "måned", "periode_key"]].head(20))
+
+    start_key = start_year * 12 + start_month
+    slut_key = start_key + months - 1
+    st.write("DEBUG – start_key:", start_key)
+    st.write("DEBUG – slut_key:", slut_key)
+    st.write("DEBUG – p2_start_key:", start_key + 12)
+    st.write("DEBUG – p2_slut_key:", slut_key + 12)
+    #DEBUG SLUT
     figs = []
 
     for fig in [
