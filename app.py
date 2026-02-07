@@ -170,6 +170,8 @@ if uploaded_file:
 
     df_all = filtrer_perioder(df, start_month, start_year, months)
     #DEBUG START
+    st.write("DEBUG – unikke ydelseskoder i df_all:", sorted(df_all["ydelseskode"].unique()))
+
     st.write("DEBUG – rå data (df):", len(df))
     st.write(df[["dato", "år", "måned"]].head(20))
 
