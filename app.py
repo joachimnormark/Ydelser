@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 from fpdf import FPDF
 import calendar
-import re
 
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
@@ -22,84 +21,27 @@ def måned_label(år, måned):
 
 
 # ---------------------------------------------------------
-# ROBUST PARSER FOR dd.mm.yy OG ddmmyy
-# ---------------------------------------------------------
-
-def parse_dato(series):
-    cleaned = series.astype(str).str.strip()
-
-    # Fjern alt undtagen tal og punktummer
-    cleaned = cleaned.str.replace(r"[^0-9\.]", "", regex=True)
-
-    parsed_dates = []
-
-    for value in cleaned:
-        if value == "":
-            parsed_dates.append(pd.NaT)
-            continue
-
-        # CASE 1: ddmmyy (fx 020124)
-        if re.fullmatch(r"\d{6}", value):
-            try:
-                d = value[:2]
-                m = value[2:4]
-                y = value[4:]
-                y = "20" + y  # 24 → 2024
-                parsed_dates.append(pd.to_datetime(f"{d}.{m}.{y}", format="%d.%m.%Y"))
-                continue
-            except:
-                parsed_dates.append(pd.NaT)
-                continue
-
-        # CASE 2: dd.mm.yy eller d.m.yy
-        try:
-            parsed_dates.append(pd.to_datetime(value, format="%d.%m.%y"))
-            continue
-        except:
-            pass
-
-        # CASE 3: dd.mm.yyyy
-        try:
-            parsed_dates.append(pd.to_datetime(value, format="%d.%m.%Y"))
-            continue
-        except:
-            parsed_dates.append(pd.NaT)
-
-    return pd.to_datetime(parsed_dates, errors="coerce")
-
-
-# ---------------------------------------------------------
-# DATAINDLÆSNING
+# DATAINDLÆSNING (ingen parsing!)
 # ---------------------------------------------------------
 
 def load_data(uploaded_file):
     df = pd.read_excel(uploaded_file)
+
+    # Standardiser kolonnenavne
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
+    # Find kolonner
     kol_dato = [c for c in df.columns if "dato" in c][0]
     kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
     kol_antal = [c for c in df.columns if "antal" in c][0]
 
-    # DEBUG
-    st.write("DEBUG – rå dato-kolonne (før parsing):")
-    st.write(df[[kol_dato]].head(30))
-    st.write("DEBUG – dtype:", df[kol_dato].dtype)
+    # Dato er allerede datetime – brug den direkte
+    if not pd.api.types.is_datetime64_any_dtype(df[kol_dato]):
+        df[kol_dato] = pd.to_datetime(df[kol_dato], errors="coerce")
 
+    df = df.dropna(subset=[kol_dato])
 
-
-    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
-
-    kol_dato = [c for c in df.columns if "dato" in c][0]
-    kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
-    kol_antal = [c for c in df.columns if "antal" in c][0]
-
-    df["dato"] = parse_dato(df[kol_dato])
-    df = df.dropna(subset=["dato"])
-
-    if df.empty:
-        st.error("Ingen gyldige datoer kunne konverteres fra filen.")
-        st.stop()
-
+    df["dato"] = df[kol_dato]
     df["år"] = df["dato"].dt.year
     df["måned"] = df["dato"].dt.month
 
