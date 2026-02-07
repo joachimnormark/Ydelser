@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from fpdf import FPDF
-import calendar
 
 st.set_page_config(page_title="Ydelsesanalyse", layout="wide")
 
@@ -21,7 +20,7 @@ def måned_label(år, måned):
 
 
 # ---------------------------------------------------------
-# DATAINDLÆSNING (ingen parsing!)
+# DATAINDLÆSNING (datoer er allerede datetime!)
 # ---------------------------------------------------------
 
 def load_data(uploaded_file):
@@ -35,7 +34,7 @@ def load_data(uploaded_file):
     kol_kode = [c for c in df.columns if "ydelseskode" in c][0]
     kol_antal = [c for c in df.columns if "antal" in c][0]
 
-    # Dato er allerede datetime – brug den direkte
+    # Dato er allerede datetime64 – brug direkte
     if not pd.api.types.is_datetime64_any_dtype(df[kol_dato]):
         df[kol_dato] = pd.to_datetime(df[kol_dato], errors="coerce")
 
@@ -52,7 +51,7 @@ def load_data(uploaded_file):
 
 
 # ---------------------------------------------------------
-# PERIODEFILTRERING
+# PERIODEFILTRERING (den rigtige måde)
 # ---------------------------------------------------------
 
 def filtrer_perioder(df, start_month, start_year, months):
@@ -77,7 +76,6 @@ def filtrer_perioder(df, start_month, start_year, months):
     p2["periode"] = "P2"
 
     return pd.concat([p1, p2], ignore_index=True)
-
 
 
 # ---------------------------------------------------------
@@ -171,8 +169,6 @@ if uploaded_file:
         months = st.selectbox("Antal måneder", [3, 6, 9, 12])
 
     df_all = filtrer_perioder(df, start_month, start_year, months)
-    st.write("DEBUG – antal rækker i df_all:", len(df_all))
-    st.write(df_all.head(20))
 
     figs = []
 
